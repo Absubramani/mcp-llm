@@ -1,0 +1,40 @@
+=== GMAIL TESTS ===
+list my last 5 emails
+read my first email
+summarize my first email
+summarize email from glassdoor
+read that
+summarize it
+send an email to abalasubramanir@gmail.com subject "Test" body "Hello from MCP agent"
+delete my test email
+search emails from noreply@glassdoor.com
+reply to my first email with "Thanks!"
+
+=== SPELLING/GRAMMAR TESTS ===
+lst my mails
+snd mail to abalasubramanir@gmail.com subject "Hi" body "Test"
+show me my inbox
+gimme my last 3 mails
+i want to saw my emails
+detele my test email
+
+=== FOLLOW-UP CONTEXT TESTS ===
+list my last 3 emails
+read the second one
+summarize it
+reply to that with "Thank you!"
+
+=== DRIVE TESTS ===
+create a folder called Projects
+create a file called notes.txt in Projects with content "Hello World"
+list files in Projects
+read notes.txt in Projects
+rename notes.txt in Projects to updated.txt
+move updated.txt from Projects to root
+delete updated.txt
+delete Projects folder
+
+=== ERROR HANDLING TESTS ===
+read email with id fakeid123
+delete folder that doesnt exist
+send email to notavalidemail

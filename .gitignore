@@ -1,0 +1,27 @@
+# Environment
+.env
+.venv/
+venv/
+
+# Google OAuth
+token.pickle
+oauth-client.json
+
+# Logs
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code
+.vscode/git status
+
+# Mac
+.DS_Store
+
+# Test outputs
+*.tmp
