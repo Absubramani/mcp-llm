@@ -11,6 +11,18 @@ MCP_SERVERS = {
     "gmail": Path(__file__).parent.parent / "mcp_servers" / "gmail_server.py",
 }
 
+# Track tools called in current request
+_tools_called_this_request = []
+
+
+def reset_tools_called():
+    global _tools_called_this_request
+    _tools_called_this_request = []
+
+
+def get_tools_called():
+    return list(_tools_called_this_request)
+
 
 async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) -> str:
     server_path = MCP_SERVERS[server_name]
@@ -18,12 +30,10 @@ async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) 
         command="python",
         args=[str(server_path)],
     )
-
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, tool_args)
-
             if result.content:
                 return "\n".join(
                     item.text for item in result.content if hasattr(item, "text")
@@ -32,27 +42,49 @@ async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) 
 
 
 def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
+    global _tools_called_this_request
+
     # Clean args
     if isinstance(tool_args, str):
         try:
+            import json
             tool_args = json.loads(tool_args)
         except Exception:
             tool_args = {}
-
     if not tool_args:
         tool_args = {}
-
     if not isinstance(tool_args, dict):
         tool_args = {}
-
     while "kwargs" in tool_args and isinstance(tool_args["kwargs"], dict):
         tool_args = tool_args["kwargs"]
 
-    # Execute and log
+    # Clean each value — extract only the number from strings like "5 (assuming...)"
+    import re
+    cleaned_args = {}
+    for k, v in tool_args.items():
+        if isinstance(v, str):
+            # Extract first number if value contains extra text
+            num_match = re.match(r'^\s*(\d+)', v)
+            if num_match:
+                cleaned_args[k] = num_match.group(1)
+            elif v.strip() == "":
+                # Skip empty values — don't pass them
+                continue
+            else:
+                cleaned_args[k] = v.strip()
+        else:
+            cleaned_args[k] = v
+
+    tool_args = cleaned_args
+
+    print(f"[DEBUG] tool={tool_name} | raw={tool_args} | type={type(tool_args)}")
+    print(f"[DEBUG] final={tool_args}")
+
     start = time.time()
     try:
         result = asyncio.run(execute_tool_async(server_name, tool_name, tool_args))
         duration = time.time() - start
+        _tools_called_this_request.append(tool_name)
         log_tool_call(tool_name, tool_args, result, duration)
         return result
     except Exception as e:
