@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
@@ -47,7 +48,6 @@ def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
     # Clean args
     if isinstance(tool_args, str):
         try:
-            import json
             tool_args = json.loads(tool_args)
         except Exception:
             tool_args = {}
@@ -58,20 +58,20 @@ def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
     while "kwargs" in tool_args and isinstance(tool_args["kwargs"], dict):
         tool_args = tool_args["kwargs"]
 
-    # Clean each value — extract only the number from strings like "5 (assuming...)"
-    import re
+    # Clean each value safely
     cleaned_args = {}
     for k, v in tool_args.items():
         if isinstance(v, str):
-            # Extract first number if value contains extra text
-            num_match = re.match(r'^\s*(\d+)', v)
+            v = v.strip()
+            if v == "":
+                continue
+            # Only extract number if value is EXACTLY "5 (some explanation)"
+            # Never truncate real IDs like "19cb259aebd5212d"
+            num_match = re.match(r'^\s*(\d+)\s+\(.*\)\s*$', v)
             if num_match:
                 cleaned_args[k] = num_match.group(1)
-            elif v.strip() == "":
-                # Skip empty values — don't pass them
-                continue
             else:
-                cleaned_args[k] = v.strip()
+                cleaned_args[k] = v
         else:
             cleaned_args[k] = v
 

@@ -1,3 +1,4 @@
+import os
 import pickle
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
@@ -359,6 +360,50 @@ def get_file_info(path: str) -> dict:
         "parents": f.get("parents", [])
     }
 
+@mcp.tool()
+def upload_file(file_path: str, folder_name: str = "", new_name: str = "") -> dict:
+    """
+    Upload any file from local machine to Google Drive.
+    file_path: full local path of the file to upload
+    folder_name: Drive folder to upload into (optional, uploads to root if empty)
+    new_name: rename file in Drive (optional, uses original name if empty)
+    """
+    import os
+    import mimetypes
 
+    try:
+        if not os.path.exists(file_path):
+            return {"status": "error", "message": f"File not found: {file_path}"}
+
+        original_name = os.path.basename(file_path)
+        upload_name = new_name if new_name else original_name
+
+        mime_type, _ = mimetypes.guess_type(file_path)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+
+        file_metadata = {"name": upload_name}
+        if folder_name:
+            folder_id = resolve_path(folder_name)
+            if folder_id:
+                file_metadata["parents"] = [folder_id]
+
+        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
+        uploaded = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id, name, mimeType"
+        ).execute()
+
+        return {
+            "status": "success",
+            "message": f"File '{upload_name}' uploaded successfully.",
+            "id": uploaded.get("id"),
+            "name": uploaded.get("name"),
+            "mime_type": uploaded.get("mimeType")
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
 if __name__ == "__main__":
     mcp.run()

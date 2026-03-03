@@ -1,3 +1,4 @@
+import os
 import pickle
 import base64
 import re
@@ -254,6 +255,76 @@ def search_emails(query: str, max_results: int = 10) -> list:
     except Exception as e:
         return [{"status": "error", "message": str(e)}]
 
+@mcp.tool()
+def send_email_with_attachment(to: str, subject: str, body: str, file_path: str, extra_file_paths: str = "") -> dict:
+    """
+    Send an email with one or more file attachments.
+    to: recipient email address
+    subject: email subject
+    body: email body text
+    file_path: full local path of the first file to attach
+    extra_file_paths: comma separated paths of additional files (optional)
+    """
+    import os
+    import mimetypes
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    try:
+        # Build list of all files
+        all_files = [file_path]
+        if extra_file_paths:
+            for p in extra_file_paths.split(","):
+                p = p.strip()
+                if p:
+                    all_files.append(p)
+
+        # Validate all files exist
+        for fp in all_files:
+            if not os.path.exists(fp):
+                return {"status": "error", "message": f"File not found: {fp}"}
+
+        # Build email
+        msg = MIMEMultipart()
+        msg["to"] = to
+        msg["subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+
+        # Attach all files
+        attached_names = []
+        for fp in all_files:
+            file_name = os.path.basename(fp)
+            mime_type, _ = mimetypes.guess_type(fp)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+            main_type, sub_type = mime_type.split("/", 1)
+
+            with open(fp, "rb") as f:
+                attachment = MIMEBase(main_type, sub_type)
+                attachment.set_payload(f.read())
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    "Content-Disposition",
+                    f"attachment; filename={file_name}"
+                )
+                msg.attach(attachment)
+                attached_names.append(file_name)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        sent = gmail_service.users().messages().send(
+            userId="me",
+            body={"raw": raw}
+        ).execute()
+
+        return {
+            "status": "success",
+            "message": f"Email sent to {to} with attachments: {', '.join(attached_names)}",
+            "id": sent.get("id")
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     mcp.run()

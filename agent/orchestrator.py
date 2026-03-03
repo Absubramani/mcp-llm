@@ -1,12 +1,13 @@
 import os
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_groq import ChatGroq
 from langchain_core.tools import StructuredTool
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from pydantic import Field, create_model
 from agent.tool_schema import fetch_tools
 from agent.tool_executor import execute_tool
+from agent.prompt import get_prompt          # ← import from new file
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -15,59 +16,19 @@ load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
 
 # ── LLM ───────────────────────────────────────────────────────────────────────
 def get_llm():
-    return ChatOllama(
-        model="llama3.1:8b",
-        base_url="http://localhost:11434",
-        temperature=0,
-    )
-
-
-# ── Prompt ────────────────────────────────────────────────────────────────────
-def get_prompt():
-    return ChatPromptTemplate.from_messages([
-        ("system",
-            "You are a smart, friendly and patient AI assistant with access to Google Drive and Gmail tools.\n\n"
-
-            "CRITICAL: When calling any tool — ALWAYS use real values from previous tool results. NEVER use placeholder text like 'insert_id_here' or 'email_id_from_search_result'.\n\n"
-
-            "AVAILABLE TOOLS:\n"
-            "DRIVE: create_folder, list_files, create_text_file, read_file, delete_file, move_file, rename_file, copy_file, search_files, get_file_info\n"
-            "GMAIL: list_emails, read_email, send_email, reply_to_email, delete_email, search_emails\n\n"
-
-            "INPUT UNDERSTANDING:\n"
-            "1. Understand spelling mistakes — 'emal' means 'email', 'delet' means 'delete', 'creat' means 'create'.\n"
-            "2. Understand short forms — 'lst' means 'list', 'snd' means 'send', 'rd' means 'read'.\n"
-            "3. Understand grammar mistakes — 'show me my mails', 'i want to saw my emails' all mean 'list emails'.\n"
-            "4. Understand informal language — 'gimme my mails', 'check my inbox' all mean 'list emails'.\n"
-            "5. If the request is unclear, make a reasonable guess and proceed.\n\n"
-
-            "FOLLOW-UP CONTEXT:\n"
-            "1. Always remember the last email or file mentioned in the conversation.\n"
-            "2. 'read that' or 'open it' — read the last mentioned email or file.\n"
-            "3. 'delete it' or 'remove it' — delete the last mentioned email or file.\n"
-            "4. 'reply to him' or 'reply to that' — reply to the last mentioned email.\n"
-            "5. 'summarize it' or 'summarize that' — summarize the last mentioned email.\n\n"
-
-            "EMAIL RULES:\n"
-            "1. When user asks to READ — call list_emails first, then call read_email with the id. Show COMPLETE content.\n"
-            "2. When user asks to SUMMARIZE — call list_emails or search_emails, then read_email, then summarize in 3-5 lines.\n"
-            "3. When user asks to DELETE — call search_emails with simple keyword, then call delete_email with FIRST result id.\n"
-            "4. When user asks to REPLY — find email id first, then call reply_to_email.\n"
-            "5. NEVER hallucinate — only use real data from tools.\n\n"
-
-            "ERROR HANDLING:\n"
-            "1. NEVER show raw technical errors to the user.\n"
-            "2. If tool result says 'status: success' — confirm clearly to user.\n"
-            "3. If tool result says 'status: error' — give a friendly message.\n\n"
-
-            "RESPONSE STYLE:\n"
-            "1. Be professional, friendly and concise.\n"
-            "2. Always confirm completed actions clearly.\n"
-        ),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
+    provider = os.getenv("LLM_PROVIDER", "ollama")
+    if provider == "groq":
+        return ChatGroq(
+            api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+        )
+    else:
+        return ChatOllama(
+            model="llama3.1:8b",
+            base_url="http://localhost:11434",
+            temperature=0,
+        )
 
 
 # ── Tools Builder ─────────────────────────────────────────────────────────────
@@ -134,12 +95,26 @@ def run_agent(user_input: str, conversation_history: list[dict]) -> tuple[str, l
         max_iterations=10,
     )
 
+    followup_keywords = [
+        "read that", "summarize it", "summarize that", "delete it",
+        "reply to that", "reply to him", "open it", "that one",
+        "second one", "first one", "third one", "the same", "it"
+    ]
+    new_action_keywords = [
+        "list", "lst", "show", "gimme", "get", "create",
+        "send", "snd", "search", "find", "make"
+    ]
+
+    is_followup = any(kw in user_input.lower() for kw in followup_keywords)
+    is_new_action = any(kw in user_input.lower() for kw in new_action_keywords)
+
     chat_history = []
-    for msg in conversation_history[-4:]:
-        if msg["role"] == "user":
-            chat_history.append(HumanMessage(content=msg["content"]))
-        elif msg["role"] == "assistant" and msg.get("content"):
-            chat_history.append(AIMessage(content=msg["content"]))
+    if is_followup or not is_new_action:
+        for msg in conversation_history[-4:]:
+            if msg["role"] == "user":
+                chat_history.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant" and msg.get("content"):
+                chat_history.append(AIMessage(content=msg["content"]))
 
     try:
         result = agent_executor.invoke({
