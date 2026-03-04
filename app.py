@@ -1,5 +1,6 @@
 import streamlit as st
 from agent.orchestrator import run_agent
+from datetime import date
 import tempfile
 import os
 
@@ -37,6 +38,15 @@ if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 if "just_used_files" not in st.session_state:
     st.session_state.just_used_files = False
+if "working_key_index" not in st.session_state:
+    st.session_state.working_key_index = 0
+if "working_key_date" not in st.session_state:
+    st.session_state.working_key_date = str(date.today())
+
+# ── Reset key index on new day ────────────────────────────────────────────────
+if st.session_state.working_key_date != str(date.today()):
+    st.session_state.working_key_index = 0
+    st.session_state.working_key_date = str(date.today())
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -84,6 +94,8 @@ with st.sidebar:
         st.session_state.uploaded_file_names = []
         st.session_state.just_used_files = False
         st.session_state.uploader_key += 1
+        st.session_state.working_key_index = 0
+        st.session_state.working_key_date = str(date.today())
         st.rerun()
 
 # ── Main Chat ─────────────────────────────────────────────────────────────────
@@ -103,7 +115,7 @@ user_input = st.chat_input("Ask me anything...")
 
 if user_input:
 
-    # Pass file paths to LLM if files are uploaded — LLM decides what to do
+    # Pass file paths to LLM if files uploaded — LLM decides what to do
     full_input = user_input
     if st.session_state.uploaded_file_paths:
         files_str = " ".join([f"[FILE: {p}]" for p in st.session_state.uploaded_file_paths])
@@ -127,11 +139,13 @@ if user_input:
     with st.chat_message("assistant"):
         with st.spinner("Working on it..."):
             try:
-                reply, updated_history = run_agent(
+                reply, updated_history, working_key = run_agent(
                     full_input,
                     st.session_state.conversation_history,
+                    st.session_state.working_key_index,
                 )
                 st.session_state.conversation_history = updated_history
+                st.session_state.working_key_index = working_key
                 st.write(reply)
                 st.session_state.messages.append({
                     "role": "assistant",

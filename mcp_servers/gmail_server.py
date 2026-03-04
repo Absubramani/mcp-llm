@@ -121,7 +121,6 @@ def list_emails(max_results: int = 10, query: str = "", num: int = None) -> list
 
     return emails
 
-
 @mcp.tool()
 def read_email(email_id: str) -> dict:
     """
@@ -136,6 +135,10 @@ def read_email(email_id: str) -> dict:
 
         headers = msg.get("payload", {}).get("headers", [])
         body = get_email_body(msg.get("payload", {}))
+
+        # Truncate long emails to save tokens
+        if len(body) > 2000:
+            body = body[:2000] + "\n\n[Email truncated — showing first 2000 characters]"
 
         return {
             "id": email_id,

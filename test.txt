@@ -23,6 +23,7 @@ list my last 3 emails
 read the second one
 summarize it
 reply to that with "Thank you!"
+delete it
 
 === DRIVE TESTS ===
 create a folder called Projects
@@ -34,7 +35,25 @@ move updated.txt from Projects to root
 delete updated.txt
 delete Projects folder
 
+=== FILE UPLOAD TESTS ===
+upload this file to Projects folder
+upload this file to root
+send email to abalasubramanir@gmail.com with this file subject "Test" body "Please find attached"
+send email to abalasubramanir@gmail.com with these files subject "Test" body "Please find attached"
+send email with files to abalasubramanir@gmail.com subject "Test" body "Testing"
+
 === ERROR HANDLING TESTS ===
 read email with id fakeid123
 delete folder that doesnt exist
 send email to notavalidemail
+upload this file to drive [without uploading file first]
+send email with this file [without uploading file first]
+
+=== CONVERSATION TESTS ===
+hi
+hello
+what can you do
+who is elon musk
+tell me a joke
+what is python
+hccxxxg

@@ -60,3 +60,12 @@ def log_error(error: str, context: str = ""):
 
 def log_rate_limit(wait_seconds: int, model: str):
     logger.warning(f"RATE LIMIT | {model} | retry in {wait_seconds // 60}m {wait_seconds % 60}s")
+
+def log_llm_fallback(key_number: int, reason: str):
+    logger.warning(f"LLM      | Groq Key {key_number} failed — {reason[:80]}")
+
+def log_llm_selected(provider: str, key_number: int = 0):
+    if key_number:
+        logger.info(f"LLM      | Using Groq Key {key_number}")
+    else:
+        logger.info(f"LLM      | Using {provider}")
