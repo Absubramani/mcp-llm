@@ -2,6 +2,7 @@ import os
 import pickle
 import base64
 import re
+import threading
 from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -21,28 +22,73 @@ SCOPES = [
     "https://mail.google.com/",
 ]
 
+mcp = FastMCP("Gmail MCP")
+
 # ================= AUTH =================
 
-creds = None
-if TOKEN_FILE.exists():
-    with open(TOKEN_FILE, "rb") as token:
-        creds = pickle.load(token)
+_local = threading.local()
 
-if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-    else:
-        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET_FILE), SCOPES)
-        creds = flow.run_local_server(port=0)
-    with open(TOKEN_FILE, "wb") as token:
-        pickle.dump(creds, token)
 
-gmail_service = build("gmail", "v1", credentials=creds)
-mcp = FastMCP("Gmail MCP")
+def get_service():
+    """Get gmail service for current request — lazy init per thread."""
+    if not hasattr(_local, "gmail_service") or _local.gmail_service is None:
+        _local.gmail_service = get_gmail_service()
+    return _local.gmail_service
+
+
+def get_gmail_service(creds=None):
+    """Build and return a Gmail service using best available credentials."""
+    # 1. Use directly passed creds
+    if creds:
+        return build("gmail", "v1", credentials=creds)
+
+    # 2. Use creds from temp file passed by tool_executor
+    creds_file = os.environ.get("MCP_CREDS_FILE")
+    if creds_file and Path(creds_file).exists():
+        try:
+            with open(creds_file, "rb") as f:
+                user_creds = pickle.load(f)
+            if user_creds and user_creds.valid:
+                return build("gmail", "v1", credentials=user_creds)
+            # Try refresh if expired
+            if user_creds and user_creds.expired and user_creds.refresh_token:
+                user_creds.refresh(Request())
+                return build("gmail", "v1", credentials=user_creds)
+        except Exception:
+            pass
+
+    # 3. Fallback to local token.pickle for CLI/testing
+    local_creds = None
+    if TOKEN_FILE.exists():
+        try:
+            with open(TOKEN_FILE, "rb") as f:
+                local_creds = pickle.load(f)
+        except Exception:
+            TOKEN_FILE.unlink(missing_ok=True)
+
+    if local_creds and local_creds.expired and local_creds.refresh_token:
+        try:
+            local_creds.refresh(Request())
+            with open(TOKEN_FILE, "wb") as f:
+                pickle.dump(local_creds, f)
+        except Exception:
+            TOKEN_FILE.unlink(missing_ok=True)
+            local_creds = None
+
+    if not local_creds or not local_creds.valid:
+        flow = InstalledAppFlow.from_client_secrets_file(
+            str(CLIENT_SECRET_FILE), SCOPES
+        )
+        local_creds = flow.run_local_server(port=0)
+        with open(TOKEN_FILE, "wb") as f:
+            pickle.dump(local_creds, f)
+
+    return build("gmail", "v1", credentials=local_creds)
+
 
 # ================= HELPERS =================
 
-def build_message(to: str, subject: str, body: str, reply_to_id: str = None) -> dict:
+def build_message(to: str, subject: str, body: str, thread_id: str = None) -> dict:
     message = MIMEMultipart()
     message["to"] = to
     message["subject"] = subject
@@ -51,8 +97,8 @@ def build_message(to: str, subject: str, body: str, reply_to_id: str = None) -> 
     raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
     payload = {"raw": raw}
 
-    if reply_to_id:
-        payload["threadId"] = reply_to_id
+    if thread_id:
+        payload["threadId"] = thread_id
 
     return payload
 
@@ -65,11 +111,22 @@ def parse_headers(headers: list, key: str) -> str:
 
 
 def get_email_body(payload: dict) -> str:
+    """Extract clean plain text body from email payload."""
+    # Handle multipart emails
     if "parts" in payload:
         for part in payload["parts"]:
             if part["mimeType"] == "text/plain":
                 data = part["body"].get("data", "")
-                return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                if data:
+                    return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+        # Fallback to first part if no plain text
+        for part in payload["parts"]:
+            data = part.get("body", {}).get("data", "")
+            if data:
+                text = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                text = re.sub(r'<[^>]+>', ' ', text)
+                text = re.sub(r'\s+', ' ', text).strip()
+                return text
     else:
         data = payload.get("body", {}).get("data", "")
         if data:
@@ -77,57 +134,62 @@ def get_email_body(payload: dict) -> str:
             text = re.sub(r'<[^>]+>', ' ', text)
             text = re.sub(r'\s+', ' ', text).strip()
             return text
+
     return "No body content."
 
 
 # ================= TOOLS =================
 
 @mcp.tool()
-def list_emails(max_results: int = 10, query: str = "", num: int = None) -> list:
+def list_emails(max_results: str = "10", query: str = "", num: str = "") -> list:
     """
-    List emails from Gmail inbox. Use max_results parameter to specify count.
-    Example: max_results=5 for last 5 emails.
+    List emails from Gmail inbox. Use max_results to specify count.
+    Example: max_results='5' for last 5 emails.
     Optionally filter with query like 'from:someone@gmail.com' or 'subject:hello'.
     """
-    # Handle model using wrong parameter name
-    if num is not None:
-        max_results = num
+    gmail_service = get_service()
+    try:
+        count = int(num) if num else int(max_results) if max_results else 10
+        q = "in:inbox " + query if query else "in:inbox"
 
-    q = "in:inbox " + query if query else "in:inbox"
-    results = gmail_service.users().messages().list(
-        userId="me", maxResults=max_results, q=q
-    ).execute()
-
-    messages = results.get("messages", [])
-    if not messages:
-        return [{"message": "No emails found."}]
-
-    emails = []
-    for msg in messages:
-        detail = gmail_service.users().messages().get(
-            userId="me", id=msg["id"], format="metadata",
-            metadataHeaders=["From", "Subject", "Date"]
+        results = gmail_service.users().messages().list(
+            userId="me", maxResults=count, q=q
         ).execute()
 
-        headers = detail.get("payload", {}).get("headers", [])
-        emails.append({
-            "id": msg["id"],
-            "thread_id": detail.get("threadId"),
-            "from": parse_headers(headers, "From"),
-            "subject": parse_headers(headers, "Subject"),
-            "date": parse_headers(headers, "Date"),
-            "snippet": detail.get("snippet", ""),
-        })
+        messages = results.get("messages", [])
+        if not messages:
+            return [{"message": "No emails found."}]
 
-    return emails
+        emails = []
+        for msg in messages:
+            detail = gmail_service.users().messages().get(
+                userId="me", id=msg["id"], format="metadata",
+                metadataHeaders=["From", "Subject", "Date"]
+            ).execute()
+
+            headers = detail.get("payload", {}).get("headers", [])
+            emails.append({
+                "id": msg["id"],
+                "thread_id": detail.get("threadId"),
+                "from": parse_headers(headers, "From"),
+                "subject": parse_headers(headers, "Subject"),
+                "date": parse_headers(headers, "Date"),
+                "snippet": detail.get("snippet", ""),
+            })
+
+        return emails
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
+
 
 @mcp.tool()
 def read_email(email_id: str) -> dict:
     """
     Read the full content of an email by its ID.
-    Use email_id parameter with the ID from list_emails results.
+    Use the exact id string from list_emails results.
     Example: email_id='19c8a47e66de3a50'
     """
+    gmail_service = get_service()
     try:
         msg = gmail_service.users().messages().get(
             userId="me", id=email_id, format="full"
@@ -136,9 +198,9 @@ def read_email(email_id: str) -> dict:
         headers = msg.get("payload", {}).get("headers", [])
         body = get_email_body(msg.get("payload", {}))
 
-        # Truncate long emails to save tokens
-        if len(body) > 2000:
-            body = body[:2000] + "\n\n[Email truncated — showing first 2000 characters]"
+        # Truncate very long emails to save LLM tokens
+        if len(body) > 3000:
+            body = body[:3000]
 
         return {
             "id": email_id,
@@ -155,18 +217,18 @@ def read_email(email_id: str) -> dict:
 @mcp.tool()
 def send_email(to: str, subject: str, body: str) -> dict:
     """
-    Send an email. Use to, subject, body parameters.
+    Send an email.
     Example: to='someone@gmail.com', subject='Hello', body='Hi there!'
     """
+    gmail_service = get_service()
     try:
         payload = build_message(to, subject, body)
         sent = gmail_service.users().messages().send(
             userId="me", body=payload
         ).execute()
-
         return {
             "status": "success",
-            "message": f"Email sent to {to}",
+            "message": f"Email sent to {to} successfully.",
             "id": sent["id"]
         }
     except Exception as e:
@@ -176,28 +238,31 @@ def send_email(to: str, subject: str, body: str) -> dict:
 @mcp.tool()
 def reply_to_email(email_id: str, body: str) -> dict:
     """
-    Reply to an existing email using email_id from list_emails results.
+    Reply to an existing email using its id from list_emails results.
     Example: email_id='19c8a47e66de3a50', body='Thanks for your email!'
     """
+    gmail_service = get_service()
     try:
         original = gmail_service.users().messages().get(
             userId="me", id=email_id, format="metadata",
-            metadataHeaders=["From", "Subject", "Date"]
+            metadataHeaders=["From", "Subject"]
         ).execute()
 
         headers = original.get("payload", {}).get("headers", [])
         to = parse_headers(headers, "From")
-        subject = "Re: " + parse_headers(headers, "Subject")
+        subject = parse_headers(headers, "Subject")
+        if not subject.startswith("Re:"):
+            subject = "Re: " + subject
         thread_id = original.get("threadId")
 
-        payload = build_message(to, subject, body, reply_to_id=thread_id)
+        payload = build_message(to, subject, body, thread_id=thread_id)
         sent = gmail_service.users().messages().send(
             userId="me", body=payload
         ).execute()
 
         return {
             "status": "success",
-            "message": f"Reply sent to {to}",
+            "message": f"Reply sent to {to} successfully.",
             "id": sent["id"]
         }
     except Exception as e:
@@ -207,36 +272,57 @@ def reply_to_email(email_id: str, body: str) -> dict:
 @mcp.tool()
 def delete_email(email_id: str) -> dict:
     """
-    Delete an email permanently using email_id from list_emails results.
+    Move an email to trash using its id from list_emails results.
     Example: email_id='19c8a47e66de3a50'
     """
+    gmail_service = get_service()
     try:
-        gmail_service.users().messages().delete(
+        gmail_service.users().messages().trash(
             userId="me", id=email_id
         ).execute()
-
         return {
             "status": "success",
-            "message": f"Email {email_id} deleted successfully."
+            "message": "Email moved to trash successfully."
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
-def search_emails(query: str, max_results: int = 10) -> list:
+def restore_email(email_id: str) -> dict:
     """
-    Search emails using query. Use max_results to limit results.
+    Restore an email from trash using its id.
+    Example: email_id='19c8a47e66de3a50'
+    """
+    gmail_service = get_service()
+    try:
+        gmail_service.users().messages().untrash(
+            userId="me", id=email_id
+        ).execute()
+        return {
+            "status": "success",
+            "message": "Email restored from trash successfully."
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def search_emails(query: str, max_results: str = "10") -> list:
+    """
+    Search emails using a query string.
     Examples: query='from:boss@company.com', query='subject:invoice', query='after:2024/01/01'
     """
+    gmail_service = get_service()
     try:
+        count = int(max_results) if max_results else 10
         results = gmail_service.users().messages().list(
-            userId="me", maxResults=max_results, q=query
+            userId="me", maxResults=count, q=query
         ).execute()
 
         messages = results.get("messages", [])
         if not messages:
-            return [{"message": f"No emails found for query: {query}"}]
+            return [{"message": f"No emails found for: {query}"}]
 
         emails = []
         for msg in messages:
@@ -258,25 +344,23 @@ def search_emails(query: str, max_results: int = 10) -> list:
     except Exception as e:
         return [{"status": "error", "message": str(e)}]
 
+
 @mcp.tool()
 def send_email_with_attachment(to: str, subject: str, body: str, file_path: str, extra_file_paths: str = "") -> dict:
     """
     Send an email with one or more file attachments.
-    to: recipient email address
-    subject: email subject
-    body: email body text
-    file_path: full local path of the first file to attach
-    extra_file_paths: comma separated paths of additional files (optional)
+    to: recipient email address.
+    subject: email subject.
+    body: email body text.
+    file_path: full local path of the first file to attach.
+    extra_file_paths: comma separated paths of additional files (optional).
     """
-    import os
     import mimetypes
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
     from email import encoders
+    gmail_service = get_service()
 
     try:
-        # Build list of all files
         all_files = [file_path]
         if extra_file_paths:
             for p in extra_file_paths.split(","):
@@ -284,18 +368,15 @@ def send_email_with_attachment(to: str, subject: str, body: str, file_path: str,
                 if p:
                     all_files.append(p)
 
-        # Validate all files exist
         for fp in all_files:
             if not os.path.exists(fp):
                 return {"status": "error", "message": f"File not found: {fp}"}
 
-        # Build email
         msg = MIMEMultipart()
         msg["to"] = to
         msg["subject"] = subject
         msg.attach(MIMEText(body, "plain"))
 
-        # Attach all files
         attached_names = []
         for fp in all_files:
             file_name = os.path.basename(fp)
@@ -317,8 +398,7 @@ def send_email_with_attachment(to: str, subject: str, body: str, file_path: str,
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         sent = gmail_service.users().messages().send(
-            userId="me",
-            body={"raw": raw}
+            userId="me", body={"raw": raw}
         ).execute()
 
         return {
@@ -328,6 +408,7 @@ def send_email_with_attachment(to: str, subject: str, body: str, file_path: str,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     mcp.run()

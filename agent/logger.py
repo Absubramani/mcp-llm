@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -34,7 +35,9 @@ def log_tool_call(tool_name: str, args: dict, result: str, duration_sec: float):
     logger.info(f"TOOL     | [{status}] {tool_name} | args={args} | {duration_sec:.2f}s")
 
 
-def log_response(user_input: str, reply: str, duration_sec: float, tools_called: list = []):
+def log_response(user_input: str, reply: str, duration_sec: float, tools_called: list = None):
+    if tools_called is None:
+        tools_called = []
     if not tools_called:
         logger.warning(f"RESPONSE | {duration_sec:.2f}s | NO TOOLS CALLED | {reply[:80].strip()!r}")
     else:
@@ -44,7 +47,6 @@ def log_response(user_input: str, reply: str, duration_sec: float, tools_called:
 
 def log_error(error: str, context: str = ""):
     if "429" in error or "rate_limit_exceeded" in error:
-        import re
         m = re.search(r'try again in (\d+)m(\d+)', error)
         msg = f"RATE LIMIT | retry in {m.group(1)}m {m.group(2)}s" if m else "RATE LIMIT"
     elif "413" in error or "too large" in error.lower():
@@ -53,6 +55,8 @@ def log_error(error: str, context: str = ""):
         msg = "TOOL PARSE FAIL | invalid tool call syntax"
     elif "Invalid id value" in error:
         msg = "INVALID ID | placeholder used instead of real id"
+    elif "failed to call a function" in error.lower():
+        msg = "TOOL SCHEMA FAIL | Groq rejected tool schema"
     else:
         msg = error[:120]
     logger.error(f"ERROR    | {msg} | context={context}")
@@ -61,8 +65,21 @@ def log_error(error: str, context: str = ""):
 def log_rate_limit(wait_seconds: int, model: str):
     logger.warning(f"RATE LIMIT | {model} | retry in {wait_seconds // 60}m {wait_seconds % 60}s")
 
+
 def log_llm_fallback(key_number: int, reason: str):
-    logger.warning(f"LLM      | Groq Key {key_number} failed — {reason[:80]}")
+    # Extract clean reason
+    if "429" in reason or "rate_limit" in reason.lower():
+        clean_reason = "Rate limit exceeded"
+    elif "401" in reason or "invalid api key" in reason.lower():
+        clean_reason = "Invalid API key"
+    elif "400" in reason and "failed to call a function" in reason.lower():
+        clean_reason = "Tool schema rejected"
+    elif "tool_use_failed" in reason.lower():
+        clean_reason = "Tool parse failed"
+    else:
+        clean_reason = reason[:60]
+    logger.warning(f"LLM      | Groq Key {key_number} failed — {clean_reason}")
+
 
 def log_llm_selected(provider: str, key_number: int = 0):
     if key_number:

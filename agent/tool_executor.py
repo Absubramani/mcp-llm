@@ -2,6 +2,9 @@ import asyncio
 import json
 import re
 import time
+import pickle
+import tempfile
+import os
 from pathlib import Path
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -14,6 +17,7 @@ MCP_SERVERS = {
 
 # Track tools called in current request
 _tools_called_this_request = []
+_current_creds_file = None
 
 
 def reset_tools_called():
@@ -25,11 +29,47 @@ def get_tools_called():
     return list(_tools_called_this_request)
 
 
+def set_current_creds(creds):
+    """Save credentials to temp file for MCP server processes to use."""
+    global _current_creds_file
+
+    # Cleanup previous temp file first
+    cleanup_creds_file()
+
+    if creds:
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".pickle", prefix="mcp_creds_"
+        )
+        with open(tmp.name, "wb") as f:
+            pickle.dump(creds, f)
+        _current_creds_file = tmp.name
+
+
+def cleanup_creds_file():
+    """Delete temp credentials file after request."""
+    global _current_creds_file
+    if _current_creds_file and os.path.exists(_current_creds_file):
+        try:
+            os.unlink(_current_creds_file)
+        except Exception:
+            pass
+    _current_creds_file = None
+
+
 async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) -> str:
-    server_path = MCP_SERVERS[server_name]
+    server_path = MCP_SERVERS.get(server_name)
+    if not server_path:
+        return f"Error: Unknown server '{server_name}'"
+
+    # Pass creds file path as environment variable to MCP server process
+    env = os.environ.copy()
+    if _current_creds_file and os.path.exists(_current_creds_file):
+        env["MCP_CREDS_FILE"] = _current_creds_file
+
     server_params = StdioServerParameters(
         command="python",
         args=[str(server_path)],
+        env=env,
     )
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -42,8 +82,12 @@ async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) 
             return "Tool executed but returned no output."
 
 
-def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
+def execute_tool(server_name: str, tool_name: str, tool_args, creds=None) -> str:
     global _tools_called_this_request
+
+    # Set creds if provided — only set once per session, not every tool call
+    if creds and not _current_creds_file:
+        set_current_creds(creds)
 
     # Clean args
     if isinstance(tool_args, str):
@@ -65,7 +109,7 @@ def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
             v = v.strip()
             if v == "":
                 continue
-            # Only extract number if value is EXACTLY "5 (some explanation)"
+            # Extract number only if value is EXACTLY "5 (some explanation)"
             # Never truncate real IDs like "19cb259aebd5212d"
             num_match = re.match(r'^\s*(\d+)\s+\(.*\)\s*$', v)
             if num_match:
@@ -76,9 +120,6 @@ def execute_tool(server_name: str, tool_name: str, tool_args) -> str:
             cleaned_args[k] = v
 
     tool_args = cleaned_args
-
-    print(f"[DEBUG] tool={tool_name} | raw={tool_args} | type={type(tool_args)}")
-    print(f"[DEBUG] final={tool_args}")
 
     start = time.time()
     try:

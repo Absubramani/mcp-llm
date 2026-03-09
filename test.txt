@@ -1,59 +1,165 @@
 === GMAIL TESTS ===
+
 list my last 5 emails
+
 read my first email
+
 summarize my first email
+
 summarize email from glassdoor
+
 read that
+
 summarize it
+
 send an email to abalasubramanir@gmail.com subject "Test" body "Hello from MCP agent"
+
 delete my test email
+
+restore my test email
+
 search emails from noreply@glassdoor.com
+
 reply to my first email with "Thanks!"
 
-=== SPELLING/GRAMMAR TESTS ===
+=== SPELLING AND GRAMMAR TESTS ===
+
 lst my mails
+
 snd mail to abalasubramanir@gmail.com subject "Hi" body "Test"
+
 show me my inbox
+
 gimme my last 3 mails
+
 i want to saw my emails
+
 detele my test email
 
-=== FOLLOW-UP CONTEXT TESTS ===
+=== FOLLOW UP CONTEXT TESTS ===
+
 list my last 3 emails
+
 read the second one
+
 summarize it
+
 reply to that with "Thank you!"
+
 delete it
 
+restore it
+
 === DRIVE TESTS ===
+
 create a folder called Projects
+
 create a file called notes.txt in Projects with content "Hello World"
+
+create a file called data.csv in Projects with content "name,age\nBala,25"
+
+create a file called info.md in Projects with content "# Hello\nThis is markdown"
+
 list files in Projects
+
 read notes.txt in Projects
+
 rename notes.txt in Projects to updated.txt
+
 move updated.txt from Projects to root
+
 delete updated.txt
+
+restore updated.txt
+
 delete Projects folder
 
-=== FILE UPLOAD TESTS ===
+restore Projects folder
+
+=== DRIVE ADVANCED TESTS ===
+
+list recent files
+
+show more files
+
+list my last 10 drive files
+
+download notes.txt from Projects
+
+copy notes.txt from Projects to root
+
+search for notes in drive
+
+get info about notes.txt in Projects
+
+send notes.txt from Projects to abalasubramanir@gmail.com
+
+send a drive file to someone
+
+=== FILE UPLOAD TESTS (attach file via sidebar first) ===
+
 upload this file to Projects folder
+
 upload this file to root
-send email to abalasubramanir@gmail.com with this file subject "Test" body "Please find attached"
-send email to abalasubramanir@gmail.com with these files subject "Test" body "Please find attached"
-send email with files to abalasubramanir@gmail.com subject "Test" body "Testing"
+
+send email to abalasubramanir@gmail.com with this file subject "Attachment Test" body "Please find attached"
+
+send email to abalasubramanir@gmail.com with these files subject "Multi File Test" body "Please find attached"
 
 === ERROR HANDLING TESTS ===
+
 read email with id fakeid123
+
 delete folder that doesnt exist
+
 send email to notavalidemail
-upload this file to drive [without uploading file first]
-send email with this file [without uploading file first]
+
+upload this file to drive
+
+send email with this file
+
+send notes.txt from drive to someone
 
 === CONVERSATION TESTS ===
+
 hi
+
 hello
+
 what can you do
+
 who is elon musk
+
 tell me a joke
+
 what is python
+
 hccxxxg
+
+=== MULTI USER TESTS (logout and login with second account) ===
+
+list my last 5 emails
+
+read my first email
+
+send an email to abalasubramanir@gmail.com subject "Multi User Test" body "Testing from second account"
+
+list recent files
+
+=== PERFORMANCE TESTS ===
+
+list my last 10 emails
+
+list my last 20 emails
+
+search emails from linkedin
+
+search emails with subject invoice
+
+=== SESSION PERSISTENCE TESTS (refresh browser and test) ===
+
+list my last 3 emails
+
+read the first one
+
+summarize it

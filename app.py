@@ -1,9 +1,17 @@
-import streamlit as st
-from agent.orchestrator import run_agent
-from datetime import date
-import tempfile
 import os
+import tempfile
+from datetime import date
+from agent.orchestrator import run_agent, run_agent_stream
+import streamlit as st
 
+from agent.auth import (
+    delete_token, exchange_code_for_token,
+    get_auth_url, get_user_email,
+    load_token, save_token,
+)
+from agent.orchestrator import run_agent
+
+# ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="AI Assistant",
     page_icon="🤖",
@@ -26,32 +34,105 @@ SYSTEM_PROMPT = {
 }
 
 # ── Session State Init ────────────────────────────────────────────────────────
-if "conversation_history" not in st.session_state:
-    st.session_state.conversation_history = [SYSTEM_PROMPT]
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "uploaded_file_paths" not in st.session_state:
-    st.session_state.uploaded_file_paths = []
-if "uploaded_file_names" not in st.session_state:
-    st.session_state.uploaded_file_names = []
-if "uploader_key" not in st.session_state:
-    st.session_state.uploader_key = 0
-if "just_used_files" not in st.session_state:
-    st.session_state.just_used_files = False
-if "working_key_index" not in st.session_state:
-    st.session_state.working_key_index = 0
-if "working_key_date" not in st.session_state:
-    st.session_state.working_key_date = str(date.today())
+defaults = {
+    "user_email": None,
+    "user_creds": None,
+    "saved_email": None,
+    "oauth_flow": None,
+    "auth_url": None,
+    "conversation_history": [SYSTEM_PROMPT],
+    "messages": [],
+    "uploaded_file_paths": [],
+    "uploaded_file_names": [],
+    "uploader_key": 0,
+    "just_used_files": False,
+    "working_key_index": 0,
+    "working_key_date": str(date.today()),
+}
+for key, val in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = val
 
-# ── Reset key index on new day ────────────────────────────────────────────────
+# ── Daily Reset ───────────────────────────────────────────────────────────────
 if st.session_state.working_key_date != str(date.today()):
     st.session_state.working_key_index = 0
     st.session_state.working_key_date = str(date.today())
 
+# ── Handle OAuth Callback ─────────────────────────────────────────────────────
+query_params = st.query_params
+if "code" in query_params and st.session_state.user_email is None:
+    code = query_params["code"]
+    state = query_params.get("state", "")
+    try:
+        with st.spinner("Logging you in..."):
+            creds = exchange_code_for_token(state, code)
+            email = get_user_email(creds)
+            if email == "unknown":
+                st.error("Could not retrieve your email. Please try again.")
+                st.stop()
+            save_token(email, creds)
+            st.session_state.user_email = email
+            st.session_state.user_creds = creds
+            st.session_state.saved_email = email
+            st.session_state.auth_url = None  # clear auth url after login
+            st.query_params.clear()
+            st.rerun()
+    except Exception as e:
+        st.error(f"Login failed: {str(e)}")
+        st.session_state.auth_url = None  # reset so new url is generated
+        st.stop()
+
+# ── Try Loading Existing Token ────────────────────────────────────────────────
+if st.session_state.user_email is None:
+    saved_email = st.session_state.saved_email
+    if saved_email:
+        creds = load_token(saved_email)
+        if creds:
+            st.session_state.user_email = saved_email
+            st.session_state.user_creds = creds
+
+# ── Login Page ────────────────────────────────────────────────────────────────
+if st.session_state.user_email is None:
+    if not st.session_state.auth_url:
+        try:
+            auth_url, state = get_auth_url()
+            st.session_state.auth_url = auth_url
+        except Exception as e:
+            st.error(f"Failed to generate login URL: {str(e)}")
+            st.stop()
+
+    st.title("🤖 AI Assistant")
+    st.caption("Your personal Gmail & Google Drive assistant")
+    st.divider()
+    st.markdown("### Welcome! Please login to continue.")
+    st.write("This app helps you manage your Gmail and Google Drive using AI.")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    st.markdown(
+        f'''
+        <a href="{st.session_state.auth_url}" target="_self" style="
+            display: inline-block;
+            background-color: #4285f4;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+        ">🔐 Login with Google</a>
+        ''',
+        unsafe_allow_html=True
+    )
+    st.stop()
+    
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🤖 AI Assistant")
     st.caption("Gmail & Google Drive")
+    st.divider()
+
+    st.markdown(f"👤 **{st.session_state.user_email}**")
     st.divider()
 
     st.markdown("#### 📎 Attach File")
@@ -81,8 +162,6 @@ with st.sidebar:
         st.session_state.uploaded_file_names = []
         st.caption("Upload to attach to email or Drive")
     else:
-        st.session_state.uploaded_file_paths = []
-        st.session_state.uploaded_file_names = []
         st.caption("Upload to attach to email or Drive")
 
     st.divider()
@@ -96,6 +175,12 @@ with st.sidebar:
         st.session_state.uploader_key += 1
         st.session_state.working_key_index = 0
         st.session_state.working_key_date = str(date.today())
+        st.rerun()
+
+    if st.button("🚪 Logout", use_container_width=True):
+        delete_token(st.session_state.user_email)
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
 # ── Main Chat ─────────────────────────────────────────────────────────────────
@@ -114,14 +199,11 @@ for msg in st.session_state.messages:
 user_input = st.chat_input("Ask me anything...")
 
 if user_input:
-
-    # Pass file paths to LLM if files uploaded — LLM decides what to do
     full_input = user_input
     if st.session_state.uploaded_file_paths:
         files_str = " ".join([f"[FILE: {p}]" for p in st.session_state.uploaded_file_paths])
         full_input = f"{user_input} {files_str}"
 
-    # Show user message
     with st.chat_message("user"):
         if st.session_state.uploaded_file_names:
             names = ", ".join(st.session_state.uploaded_file_names)
@@ -135,22 +217,39 @@ if user_input:
         else f"{user_input} 📎 {', '.join(st.session_state.uploaded_file_names)}"
     })
 
-    # Get response
     with st.chat_message("assistant"):
         with st.spinner("Working on it..."):
             try:
-                reply, updated_history, working_key = run_agent(
+                # ── Streaming response ────────────────────────────────────
+                reply_box = st.empty()
+                full_reply = []
+                updated_history = None
+                working_key = st.session_state.working_key_index
+
+                for token, hist, key in run_agent_stream(
                     full_input,
                     st.session_state.conversation_history,
                     st.session_state.working_key_index,
-                )
-                st.session_state.conversation_history = updated_history
+                    st.session_state.user_creds,
+                ):
+                    if token is not None:
+                        full_reply.append(token)
+                        reply_box.markdown("".join(full_reply))
+                    if hist is not None:
+                        updated_history = hist
+                    if key is not None:
+                        working_key = key
+
+                if updated_history:
+                    st.session_state.conversation_history = updated_history
                 st.session_state.working_key_index = working_key
-                st.write(reply)
+
+                final_reply = "".join(full_reply)
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": reply
+                    "content": final_reply
                 })
+
             except Exception as e:
                 error_msg = "Something went wrong. Please try again."
                 st.error(error_msg)
@@ -159,7 +258,6 @@ if user_input:
                     "content": error_msg
                 })
 
-    # Clear files after every message if files were attached
     if st.session_state.uploaded_file_paths:
         st.session_state.just_used_files = True
         st.session_state.uploader_key += 1

@@ -24,11 +24,24 @@ async def get_tools_from_server(server_name: str, server_path: Path) -> list[dic
                 schema = dict(tool.inputSchema)
                 schema.pop("title", None)
 
+                # Clean properties — remove title, force all types to string
                 clean_properties = {}
                 for prop_name, prop_val in schema.get("properties", {}).items():
                     clean_prop = dict(prop_val)
                     clean_prop.pop("title", None)
+
+                    # Force all types to string — Groq rejects integer/boolean
+                    clean_prop["type"] = "string"
+
+                    # Convert non-string defaults to string
+                    if "default" in clean_prop:
+                        if clean_prop["default"] is None:
+                            clean_prop["default"] = ""
+                        else:
+                            clean_prop["default"] = str(clean_prop["default"])
+
                     clean_properties[prop_name] = clean_prop
+
                 schema["properties"] = clean_properties
 
                 result.append({
@@ -47,11 +60,14 @@ async def get_all_tools() -> tuple[list[dict], dict[str, str]]:
     tool_server_map = {}
 
     for server_name, server_path in MCP_SERVERS.items():
-        tools = await get_tools_from_server(server_name, server_path)
-        for tool in tools:
-            tool_name = tool["function"]["name"]
-            all_tools.append(tool)
-            tool_server_map[tool_name] = server_name
+        try:
+            tools = await get_tools_from_server(server_name, server_path)
+            for tool in tools:
+                tool_name = tool["function"]["name"]
+                all_tools.append(tool)
+                tool_server_map[tool_name] = server_name
+        except Exception as e:
+            print(f"[ERROR] Failed to load tools from {server_name}: {e}")
 
     return all_tools, tool_server_map
 
