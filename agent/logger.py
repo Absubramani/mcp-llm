@@ -46,17 +46,24 @@ def log_response(user_input: str, reply: str, duration_sec: float, tools_called:
 
 
 def log_error(error: str, context: str = ""):
-    if "429" in error or "rate_limit_exceeded" in error:
+    lower = error.lower()
+    if any(x in lower for x in [
+        "429", "rate_limit_exceeded", "rate_limit",
+        "tokens per day", "tokens per minute",
+        "requests per minute", "too many requests"
+    ]):
         m = re.search(r'try again in (\d+)m(\d+)', error)
         msg = f"RATE LIMIT | retry in {m.group(1)}m {m.group(2)}s" if m else "RATE LIMIT"
-    elif "413" in error or "too large" in error.lower():
+    elif "413" in error or "too large" in lower:
         msg = "TOKEN LIMIT | request too large"
-    elif "tool_use_failed" in error:
+    elif "tool_use_failed" in lower or "failed_generation" in lower:
         msg = "TOOL PARSE FAIL | invalid tool call syntax"
-    elif "Invalid id value" in error:
+    elif "invalid id value" in lower:
         msg = "INVALID ID | placeholder used instead of real id"
-    elif "failed to call a function" in error.lower():
+    elif "failed to call a function" in lower:
         msg = "TOOL SCHEMA FAIL | Groq rejected tool schema"
+    elif "invalid_api_key" in lower or "401" in error or "unauthorized" in lower:
+        msg = "AUTH ERROR | invalid or expired API key"
     else:
         msg = error[:120]
     logger.error(f"ERROR    | {msg} | context={context}")
@@ -66,23 +73,34 @@ def log_rate_limit(wait_seconds: int, model: str):
     logger.warning(f"RATE LIMIT | {model} | retry in {wait_seconds // 60}m {wait_seconds % 60}s")
 
 
-def log_llm_fallback(key_number: int, reason: str):
-    # Extract clean reason
-    if "429" in reason or "rate_limit" in reason.lower():
-        clean_reason = "Rate limit exceeded"
-    elif "401" in reason or "invalid api key" in reason.lower():
-        clean_reason = "Invalid API key"
-    elif "400" in reason and "failed to call a function" in reason.lower():
-        clean_reason = "Tool schema rejected"
-    elif "tool_use_failed" in reason.lower():
-        clean_reason = "Tool parse failed"
+def log_llm_fallback(key_num: int, error_str: str):
+    lower = error_str.lower()
+    if any(x in lower for x in [
+        "rate_limit", "429", "tokens per day",
+        "rate_limit_exceeded", "tokens per minute",
+        "requests per minute", "too many requests"
+    ]):
+        reason = "Rate limited"
+    elif any(x in lower for x in ["invalid_api_key", "401", "unauthorized"]):
+        reason = "Invalid API key"
+    elif "tool_use_failed" in lower or "failed_generation" in lower:
+        reason = "Tool parse failed"
+    elif "400" in error_str and "failed to call a function" in lower:
+        reason = "Tool schema rejected"
     else:
-        clean_reason = reason[:60]
-    logger.warning(f"LLM      | Groq Key {key_number} failed — {clean_reason}")
+        reason = "Unknown error"
 
+    if key_num == -2:
+        logger.warning(f"LLM      | Mistral failed — {reason} → falling back")
+    else:
+        logger.warning(f"LLM      | Groq Key {key_num} failed — {reason} → falling back")
 
 def log_llm_selected(provider: str, key_number: int = 0):
     if key_number:
         logger.info(f"LLM      | Using Groq Key {key_number}")
+    elif provider == "mistral":
+        logger.info("LLM      | Using Mistral")
+    elif provider == "ollama":
+        logger.info(f"LLM      | Using Ollama")
     else:
         logger.info(f"LLM      | Using {provider}")

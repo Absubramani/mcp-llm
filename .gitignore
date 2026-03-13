@@ -1,11 +1,16 @@
 # Environment
 .env
+.env.example.local
+
+# Virtual Environment
 .venv/
 venv/
+env/
 
-# Google OAuth
-token.pickle
+# Google OAuth — never commit these
 oauth-client.json
+tokens/
+*.pickle
 
 # Logs
 logs/
@@ -16,14 +21,22 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# VS Code
-.vscode/git status
+*.pyw
+*.egg-info/
+dist/
+build/
+.vscode/
 
 # Mac
 .DS_Store
+.AppleDouble
+.LSOverride
 
-# Test outputs
+# Temp files
 *.tmp
+*.temp
+tempfile_*
+mcp_creds_*
 
-tokens/
+# Streamlit
+.streamlit/secrets.toml

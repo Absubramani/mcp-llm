@@ -1,15 +1,15 @@
 import os
+import re
 import tempfile
 from datetime import date
-from agent.orchestrator import run_agent, run_agent_stream
 import streamlit as st
 
+from agent.orchestrator import run_agent_stream
 from agent.auth import (
     delete_token, exchange_code_for_token,
     get_auth_url, get_user_email,
     load_token, save_token,
 )
-from agent.orchestrator import run_agent
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -25,6 +25,33 @@ st.markdown("""
         background-color: #1a1a1a;
         border-right: 1px solid #2a2a2a;
     }
+    @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .loader-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    margin-top: 4px;
+}
+.loader-text {
+    color: #aaaaaa;
+    font-style: italic;
+    font-size: 15px;
+    line-height: 1;
+}
+.loader-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid #333333;
+    border-top: 2px solid #888888;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+    margin-top: 1px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -32,6 +59,26 @@ SYSTEM_PROMPT = {
     "role": "system",
     "content": "You are a smart, friendly and patient AI assistant with access to Google Drive and Gmail tools."
 }
+
+LOADING_HTML = """
+<div style="display:flex;align-items:center;gap:8px;padding:6px 0;">
+    <span style="color:#aaaaaa;font-style:italic;font-size:15px;">Working on it...</span>
+    <div style="
+        width:14px;height:14px;
+        border:2px solid #333333;
+        border-top:2px solid #aaaaaa;
+        border-radius:50%;
+        animation:spin 0.8s linear infinite;
+        flex-shrink:0;
+    "></div>
+</div>
+<style>@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
+"""
+
+# ── Helper: strip hidden id comments before display ───────────────────────────
+def clean_for_display(text: str) -> str:
+    """Remove <!-- ... --> comment lines used to pass attachment ids to the LLM."""
+    return re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL).strip()
 
 # ── Session State Init ────────────────────────────────────────────────────────
 defaults = {
@@ -74,12 +121,12 @@ if "code" in query_params and st.session_state.user_email is None:
             st.session_state.user_email = email
             st.session_state.user_creds = creds
             st.session_state.saved_email = email
-            st.session_state.auth_url = None  # clear auth url after login
+            st.session_state.auth_url = None
             st.query_params.clear()
             st.rerun()
     except Exception as e:
         st.error(f"Login failed: {str(e)}")
-        st.session_state.auth_url = None  # reset so new url is generated
+        st.session_state.auth_url = None
         st.stop()
 
 # ── Try Loading Existing Token ────────────────────────────────────────────────
@@ -125,7 +172,7 @@ if st.session_state.user_email is None:
         unsafe_allow_html=True
     )
     st.stop()
-    
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🤖 AI Assistant")
@@ -191,9 +238,10 @@ if st.session_state.uploaded_file_names:
     names = ", ".join(st.session_state.uploaded_file_names)
     st.info(f"📎 **{names}** — ready to use")
 
+# Render chat history — strip hidden id comments before display
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.write(msg["content"])
+        st.markdown(clean_for_display(msg["content"]))
 
 # ── Chat Input ────────────────────────────────────────────────────────────────
 user_input = st.chat_input("Ask me anything...")
@@ -218,44 +266,46 @@ if user_input:
     })
 
     with st.chat_message("assistant"):
-        with st.spinner("Working on it..."):
-            try:
-                # ── Streaming response ────────────────────────────────────
-                reply_box = st.empty()
-                full_reply = []
-                updated_history = None
-                working_key = st.session_state.working_key_index
+        reply_box = st.empty()
+        full_reply = []
+        updated_history = None
+        working_key = st.session_state.working_key_index
 
-                for token, hist, key in run_agent_stream(
-                    full_input,
-                    st.session_state.conversation_history,
-                    st.session_state.working_key_index,
-                    st.session_state.user_creds,
-                ):
-                    if token is not None:
-                        full_reply.append(token)
-                        reply_box.markdown("".join(full_reply))
-                    if hist is not None:
-                        updated_history = hist
-                    if key is not None:
-                        working_key = key
+        reply_box.markdown(LOADING_HTML, unsafe_allow_html=True)
 
-                if updated_history:
-                    st.session_state.conversation_history = updated_history
-                st.session_state.working_key_index = working_key
+        try:
+            for token, hist, key in run_agent_stream(
+                full_input,
+                st.session_state.conversation_history,
+                st.session_state.working_key_index,
+                st.session_state.user_creds,
+            ):
+                if token is not None:
+                    full_reply.append(token)
+                    reply_box.markdown(clean_for_display("".join(full_reply)))
+                if hist is not None:
+                    updated_history = hist
+                if key is not None:
+                    working_key = key
 
-                final_reply = "".join(full_reply)
+        except Exception as e:
+            error_msg = "Something went wrong. Please try again."
+            reply_box.error(error_msg)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": error_msg
+            })
+
+        else:
+            if updated_history:
+                st.session_state.conversation_history = updated_history
+            st.session_state.working_key_index = working_key
+
+            final_reply = "".join(full_reply)
+            if final_reply and final_reply.strip():
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": final_reply
-                })
-
-            except Exception as e:
-                error_msg = "Something went wrong. Please try again."
-                st.error(error_msg)
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": error_msg
                 })
 
     if st.session_state.uploaded_file_paths:

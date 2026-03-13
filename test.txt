@@ -1,6 +1,6 @@
 === GMAIL TESTS ===
 
-list my last 5 emails
+list my last 3 emails
 
 read my first email
 
@@ -18,23 +18,52 @@ delete my test email
 
 restore my test email
 
-search emails from noreply@glassdoor.com
-
 reply to my first email with "Thanks!"
 
-=== SPELLING AND GRAMMAR TESTS ===
+search emails from linkedin
+
+forward my first email to abalasubramanir@gmail.com
+
+get attachments from my first email
+
+download the first attachment
+
+save the attachment to drive
+
+send email with cc abalasubramanir@gmail.com to abalasubramanir@gmail.com subject "CC Test" body "Testing CC"
+
+send email with bcc abalasubramanir@gmail.com to abalasubramanir@gmail.com subject "BCC Test" body "Testing BCC"
+
+
+=== SPELLING TESTS ===
 
 lst my mails
 
-snd mail to abalasubramanir@gmail.com subject "Hi" body "Test"
-
-show me my inbox
-
 gimme my last 3 mails
 
-i want to saw my emails
-
 detele my test email
+
+snd mail to abalasubramanir@gmail.com subject "Hi" body "Test"
+
+shwo my recent files
+
+serach for milestones in drive
+
+
+=== CONVERSATIONAL / MISSING INFO TESTS ===
+
+AI_ML Milestones.docx
+
+send AI_ML Milestones.docx to abalasubramanir@gmail.com
+
+send an email to abalasubramanir@gmail.com
+
+send an email
+
+forward my first email
+
+reply to my first email
+
 
 === FOLLOW UP CONTEXT TESTS ===
 
@@ -50,23 +79,36 @@ delete it
 
 restore it
 
+forward that to abalasubramanir@gmail.com
+
+get attachments from that email
+
+list my last 3 emails
+
+read the first one
+
+delete the third one
+
+
 === DRIVE TESTS ===
 
 create a folder called Projects
 
 create a file called notes.txt in Projects with content "Hello World"
 
-create a file called data.csv in Projects with content "name,age\nBala,25"
-
-create a file called info.md in Projects with content "# Hello\nThis is markdown"
+create a file called data.csv in Projects with content "name,age,Bala,25"
 
 list files in Projects
 
 read notes.txt in Projects
 
+summarize notes.txt in Projects
+
 rename notes.txt in Projects to updated.txt
 
 move updated.txt from Projects to root
+
+copy updated.txt to Projects
 
 delete updated.txt
 
@@ -76,35 +118,61 @@ delete Projects folder
 
 restore Projects folder
 
+share updated.txt with abalasubramanir@gmail.com as reader
+
+get info on updated.txt
+
+
 === DRIVE ADVANCED TESTS ===
 
 list recent files
 
-show more files
+summarize AI_ML Milestones.docx
 
-list my last 10 drive files
+summarize randomfile123.docx
 
-download notes.txt from Projects
-
-copy notes.txt from Projects to root
-
-search for notes in drive
-
-get info about notes.txt in Projects
-
-send notes.txt from Projects to abalasubramanir@gmail.com
+send AI_ML Milestones.docx to abalasubramanir@gmail.com subject "AI Files" body "Please find attached"
 
 send a drive file to someone
 
-=== FILE UPLOAD TESTS (attach file via sidebar first) ===
+download AI_ML Milestones.docx from drive
+
+search for milestones in drive
+
+AI_ML Milestones.docx
+
+notes.txt
+
+
+=== FILE TYPE TESTS ===
+
+summarize a pdf file in my drive
+
+summarize a docx file in my drive
+
+summarize an xlsx file in my drive
+
+summarize a pptx file in my drive
+
+summarize a csv file in my drive
+
+summarize a txt file in my drive
+
+summarize a Google Doc in my drive
+
+summarize a Google Sheet in my drive
+
+summarize a Google Slides in my drive
+
+
+=== FILE UPLOAD TESTS (attach a file via sidebar first) ===
 
 upload this file to Projects folder
 
-upload this file to root
+upload this file to drive
 
 send email to abalasubramanir@gmail.com with this file subject "Attachment Test" body "Please find attached"
 
-send email to abalasubramanir@gmail.com with these files subject "Multi File Test" body "Please find attached"
 
 === ERROR HANDLING TESTS ===
 
@@ -112,31 +180,35 @@ read email with id fakeid123
 
 delete folder that doesnt exist
 
-send email to notavalidemail
+summarize randomfile123.docx
 
-upload this file to drive
+send a drive file to someone
 
-send email with this file
+who is elon musk
 
-send notes.txt from drive to someone
+hccxxxg
+
+read a file called ../../../../etc/passwd
+
 
 === CONVERSATION TESTS ===
 
 hi
 
-hello
-
 what can you do
 
 who is elon musk
 
-tell me a joke
-
-what is python
-
 hccxxxg
 
-=== MULTI USER TESTS (logout and login with second account) ===
+what is the weather today
+
+tell me a joke
+
+calculate 2 + 2
+
+
+=== MULTI USER TESTS ===
 
 list my last 5 emails
 
@@ -144,22 +216,19 @@ read my first email
 
 send an email to abalasubramanir@gmail.com subject "Multi User Test" body "Testing from second account"
 
-list recent files
+list files in drive
 
-=== PERFORMANCE TESTS ===
+summarize AI_ML Milestones.docx
 
-list my last 10 emails
 
-list my last 20 emails
-
-search emails from linkedin
-
-search emails with subject invoice
-
-=== SESSION PERSISTENCE TESTS (refresh browser and test) ===
+=== SESSION PERSISTENCE TESTS (refresh browser then test) ===
 
 list my last 3 emails
 
 read the first one
 
 summarize it
+
+list my files
+
+summarize AI_ML Milestones.docx
