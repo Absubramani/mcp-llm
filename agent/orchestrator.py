@@ -113,13 +113,13 @@ def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) ->
                 ))
 
         if not fields:
-            fields["_dummy"] = (str, Field(default=""))
+            fields["dummy"] = (str, Field(default=""))
 
         ArgsModel = create_model(f"{tool_name}Args", **fields)
 
         def make_tool_fn(t_name, s_name, user_creds):
             def tool_fn(**kwargs) -> str:
-                kwargs.pop("_dummy", None)
+                kwargs.pop("dummy", None)
                 kwargs = {k: v for k, v in kwargs.items() if v != ""}
                 return execute_tool(s_name, t_name, kwargs, creds=user_creds)
             tool_fn.__name__ = t_name
@@ -518,6 +518,9 @@ def run_agent_stream(
             break
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+            log_error(f"EXCEPTION [{type(e).__name__}]: {str(e)}")
             next_key, should_break, fallback_hint, error_reply = _handle_exception(
                 str(e), key_index, groq_keys, has_mistral,
                 fallback_hint, get_tools_called, log_llm_fallback,

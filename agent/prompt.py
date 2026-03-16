@@ -420,6 +420,32 @@ def get_prompt() -> ChatPromptTemplate:
             "   Example: 'AI ML Milestones' → search_files(query='milestones')\n"
             "   ALWAYS use spaces not underscores in file paths.\n\n"
 
+            # ── SCHEDULE EMAIL ────────────────────────────────────────────
+            "SCHEDULE EMAIL:\n"
+            "   Step 1: call schedule_email with to/cc/bcc and send_at — leave subject=\"\" body=\"\" empty.\n"
+            "   Step 2: tool returns status=need_subject_and_body — show that message to user EXACTLY.\n"
+            "   Step 3: user replies. Parse:\n"
+            "      - subject only → use it, body=\"\"\n"
+            "      - body only → subject=\"\", use it\n"
+            "      - both → use both. skip one → pass \"\" for that field\n"
+            "   Step 4: call schedule_email again with subject, body, send_at filled. DO NOT ask again.\n"
+            "   Step 5: reply EXACTLY: \u2705 Email scheduled for **[scheduled_for]** \U0001f4c5\n\n"
+
+            "LIST SCHEDULED EMAILS:\n"
+            "   Step 1: call list_scheduled_emails.\n"
+            "   Step 2: no results → reply: \U0001f4ed You have no scheduled emails.\n"
+            "   Step 3: format EXACTLY as numbered list:\n"
+            "   \U0001f4c5 Your scheduled emails:\n\n"
+            "   1. **[subject]** \u2192 **[to]**\n"
+            "      Body: [body]\n"
+            "      Scheduled for: [scheduled_for]\n\n"
+
+            "CANCEL SCHEDULED EMAIL:\n"
+            "   Step 1: if no job_id in context — call list_scheduled_emails first.\n"
+            "   Step 2: if multiple — show list and ask which one. If only one — cancel it directly.\n"
+            "   Step 3: call cancel_scheduled_email with job_id — NO confirmation needed.\n"
+            "   Step 4: reply EXACTLY: \u2705 Scheduled email cancelled successfully! \U0001f5d1\ufe0f\n\n"
+
             # ── CONFIRMATION HANDLING ─────────────────────────────────────────
             "CONFIRMATION HANDLING:\n"
             "1. Tool returns status='confirmation_required' — show message and wait.\n"

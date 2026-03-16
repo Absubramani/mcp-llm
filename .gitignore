@@ -40,3 +40,5 @@ mcp_creds_*
 
 # Streamlit
 .streamlit/secrets.toml
+
+scheduled_emails.db

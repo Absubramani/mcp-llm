@@ -1,234 +1,157 @@
 === GMAIL TESTS ===
 
 list my last 3 emails
-
 read my first email
-
 summarize my first email
-
 summarize email from glassdoor
-
 read that
-
 summarize it
-
 send an email to abalasubramanir@gmail.com subject "Test" body "Hello from MCP agent"
-
 delete my test email
-
 restore my test email
-
 reply to my first email with "Thanks!"
-
 search emails from linkedin
-
 forward my first email to abalasubramanir@gmail.com
-
 get attachments from my first email
-
 download the first attachment
-
 save the attachment to drive
-
 send email with cc abalasubramanir@gmail.com to abalasubramanir@gmail.com subject "CC Test" body "Testing CC"
-
 send email with bcc abalasubramanir@gmail.com to abalasubramanir@gmail.com subject "BCC Test" body "Testing BCC"
+
+
+=== SCHEDULE EMAIL TESTS ===
+
+schedule email to abalasubramanir@gmail.com at 9am tomorrow
+schedule email to abalasubramanir@gmail.com at Friday 3pm
+schedule email to abalasubramanir@gmail.com next Monday 10am
+show my scheduled emails
+cancel my scheduled email
+schedule email to abalasubramanir@gmail.com in 2 minutes
+(wait 2 minutes and check inbox)
 
 
 === SPELLING TESTS ===
 
 lst my mails
-
 gimme my last 3 mails
-
 detele my test email
-
 snd mail to abalasubramanir@gmail.com subject "Hi" body "Test"
-
 shwo my recent files
-
 serach for milestones in drive
 
 
 === CONVERSATIONAL / MISSING INFO TESTS ===
 
 AI_ML Milestones.docx
-
 send AI_ML Milestones.docx to abalasubramanir@gmail.com
-
 send an email to abalasubramanir@gmail.com
-
 send an email
-
 forward my first email
-
 reply to my first email
 
 
 === FOLLOW UP CONTEXT TESTS ===
 
 list my last 3 emails
-
 read the second one
-
 summarize it
-
 reply to that with "Thank you!"
-
 delete it
-
 restore it
-
 forward that to abalasubramanir@gmail.com
-
 get attachments from that email
-
 list my last 3 emails
-
 read the first one
-
 delete the third one
 
 
 === DRIVE TESTS ===
 
 create a folder called Projects
-
 create a file called notes.txt in Projects with content "Hello World"
-
 create a file called data.csv in Projects with content "name,age,Bala,25"
-
 list files in Projects
-
 read notes.txt in Projects
-
 summarize notes.txt in Projects
-
 rename notes.txt in Projects to updated.txt
-
 move updated.txt from Projects to root
-
 copy updated.txt to Projects
-
 delete updated.txt
-
 restore updated.txt
-
 delete Projects folder
-
 restore Projects folder
-
 share updated.txt with abalasubramanir@gmail.com as reader
-
 get info on updated.txt
 
 
 === DRIVE ADVANCED TESTS ===
 
 list recent files
-
 summarize AI_ML Milestones.docx
-
 summarize randomfile123.docx
-
 send AI_ML Milestones.docx to abalasubramanir@gmail.com subject "AI Files" body "Please find attached"
-
 send a drive file to someone
-
 download AI_ML Milestones.docx from drive
-
 search for milestones in drive
-
 AI_ML Milestones.docx
-
 notes.txt
 
 
 === FILE TYPE TESTS ===
 
 summarize a pdf file in my drive
-
 summarize a docx file in my drive
-
 summarize an xlsx file in my drive
-
 summarize a pptx file in my drive
-
 summarize a csv file in my drive
-
 summarize a txt file in my drive
-
 summarize a Google Doc in my drive
-
 summarize a Google Sheet in my drive
-
 summarize a Google Slides in my drive
 
 
 === FILE UPLOAD TESTS (attach a file via sidebar first) ===
 
 upload this file to Projects folder
-
 upload this file to drive
-
 send email to abalasubramanir@gmail.com with this file subject "Attachment Test" body "Please find attached"
 
 
 === ERROR HANDLING TESTS ===
 
 read email with id fakeid123
-
 delete folder that doesnt exist
-
 summarize randomfile123.docx
-
 send a drive file to someone
-
 who is elon musk
-
 hccxxxg
-
 read a file called ../../../../etc/passwd
 
 
 === CONVERSATION TESTS ===
 
 hi
-
 what can you do
-
 who is elon musk
-
 hccxxxg
-
 what is the weather today
-
 tell me a joke
-
 calculate 2 + 2
 
 
 === MULTI USER TESTS ===
 
 list my last 5 emails
-
 read my first email
-
 send an email to abalasubramanir@gmail.com subject "Multi User Test" body "Testing from second account"
-
 list files in drive
-
 summarize AI_ML Milestones.docx
 
 
 === SESSION PERSISTENCE TESTS (refresh browser then test) ===
 
 list my last 3 emails
-
 read the first one
-
 summarize it
-
 list my files
-
 summarize AI_ML Milestones.docx

@@ -24,3 +24,5 @@ pdfplumber
 python-docx
 openpyxl
 python-pptx
+
+dateparser

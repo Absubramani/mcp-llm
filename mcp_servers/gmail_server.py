@@ -653,5 +653,228 @@ def download_email_attachment(
         return {"status": "error", "message": str(e)}
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SCHEDULED EMAIL — SQLite-based (production grade)
+#
+# Architecture: MCP server is stateless (new process per tool call).
+# Solution: write jobs to SQLite here; scheduler.py reads and sends them.
+# SQLite is the shared state between the stateless MCP server and scheduler.
+#
+# scheduler.py runs as a long-lived companion process (started via run.sh).
+# Jobs survive MCP restarts. Scheduler fires at exact time via APScheduler.
+# ══════════════════════════════════════════════════════════════════════════════
+
+import sqlite3 as _sqlite3
+import uuid as _uuid
+import logging as _logging
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+_sched_log = _logging.getLogger("gmail_scheduler")
+_DB_PATH   = BASE_DIR / "scheduled_emails.db"
+
+
+def _db():
+    """Open SQLite connection with row factory. Creates table if missing."""
+    conn = _sqlite3.connect(str(_DB_PATH))
+    conn.row_factory = _sqlite3.Row
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_emails (
+            job_id       TEXT PRIMARY KEY,
+            to_addr      TEXT NOT NULL,
+            subject      TEXT,
+            body         TEXT,
+            cc           TEXT,
+            bcc          TEXT,
+            send_at_utc  TEXT NOT NULL,
+            display_time TEXT,
+            creds_file   TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            sent         INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+@mcp.tool()
+def schedule_email(
+    to: str,
+    send_at: str,
+    subject: str = "",
+    body: str    = "",
+    cc: str      = "",
+    bcc: str     = "",
+) -> dict:
+    """
+    Schedule an email to be sent at a future date/time.
+    to       : recipient email address.
+    send_at  : natural language — "tomorrow 9am", "Friday 3pm", "2025-06-01 10:00".
+    subject  : email subject  — leave "" if not yet collected from user.
+    body     : email body     — leave "" if not yet collected from user.
+    cc       : CC addresses (optional).
+    bcc      : BCC addresses (optional).
+    If both subject and body are empty the tool asks for them before scheduling.
+    """
+    import dateparser
+
+    subject = _clean_field(subject)
+    body    = _clean_field(body)
+
+    # Ask for subject/body if both missing
+    if not subject and not body:
+        return {
+            "status":  "need_subject_and_body",
+            "message": "What should the **subject** and **message body** be?\n"
+                       "(Say \"no subject\" or \"no body\" to skip either)",
+        }
+
+    try:
+        parsed_dt = dateparser.parse(
+            send_at,
+            settings={
+                "PREFER_DATES_FROM":        "future",
+                "RETURN_AS_TIMEZONE_AWARE": True,
+                "TIMEZONE":                 "Asia/Kolkata",
+                "TO_TIMEZONE":              "UTC",
+            },
+        )
+        if not parsed_dt:
+            return {
+                "status":  "error",
+                "message": f"Could not understand \"{send_at}\". Try \"tomorrow 9am\" or \"Friday 3pm\".",
+            }
+
+        now_utc = _dt.now(_tz.utc)
+        if parsed_dt <= now_utc + _td(minutes=1):
+            return {
+                "status":  "error",
+                "message": "Scheduled time must be at least 1 minute in the future.",
+            }
+
+        job_id     = str(_uuid.uuid4())
+        creds_file = os.environ.get("MCP_CREDS_FILE", str(TOKEN_FILE))
+        ist        = _tz(offset=_td(hours=5, minutes=30))
+        display_time = parsed_dt.astimezone(ist).strftime("%A, %B %d at %I:%M %p IST")
+
+        conn = _db()
+        conn.execute("""
+            INSERT INTO scheduled_emails
+                (job_id, to_addr, subject, body, cc, bcc,
+                 send_at_utc, display_time, creds_file, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+        """, (
+            job_id, to, subject, body, cc or "", bcc or "",
+            parsed_dt.astimezone(_tz.utc).isoformat(),
+            display_time, creds_file,
+            now_utc.isoformat(),
+        ))
+        conn.commit()
+        conn.close()
+
+        _sched_log.info(f"[schedule] Queued job_id={job_id} to={to} at={display_time}")
+
+        return {
+            "status":        "success",
+            "message":       "Email scheduled successfully.",
+            "scheduled_for": display_time,
+            "job_id":        job_id,
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def list_scheduled_emails(max_results: str = "10") -> list:
+    """
+    List all emails currently queued for scheduled delivery.
+    Returns job_id, recipient, subject, and scheduled send time.
+    """
+    try:
+        count = int(max_results) if max_results else 10
+        conn  = _db()
+        rows  = conn.execute(
+            """SELECT job_id, to_addr, subject, display_time
+               FROM scheduled_emails
+               WHERE sent = 0
+               ORDER BY send_at_utc ASC LIMIT ?""",
+            (count,),
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return [{"message": "No scheduled emails found."}]
+
+        return [
+            {
+                "job_id":        row["job_id"],
+                "to":            row["to_addr"],
+                "subject":       row["subject"] or "(no subject)",
+                "body":          row["body"] or "(no body)",
+                "scheduled_for": row["display_time"],
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
+
+
+@mcp.tool()
+def cancel_scheduled_email(job_id: str) -> dict:
+    """
+    Cancel a scheduled email before it is sent. Cancels immediately — no confirmation needed.
+    job_id: exact job_id from list_scheduled_emails.
+    """
+    try:
+        conn = _db()
+        row  = conn.execute(
+            "SELECT * FROM scheduled_emails WHERE job_id = ? AND sent = 0",
+            (job_id,),
+        ).fetchone()
+
+        if not row:
+            conn.close()
+            return {
+                "status":  "error",
+                "message": "Scheduled email not found — it may have already been sent or cancelled.",
+            }
+
+        conn.execute("DELETE FROM scheduled_emails WHERE job_id = ?", (job_id,))
+        conn.commit()
+        conn.close()
+
+        return {
+            "status":  "success",
+            "message": f"Scheduled email to **{row['to_addr']}** | Subject: **{row['subject'] or '(no subject)'}** | was cancelled successfully.",
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def get_user_timezone() -> dict:
+    """
+    Get the system local timezone.
+    Only call this when user explicitly asks what their timezone is.
+    """
+    try:
+        import datetime
+        utc_offset = datetime.datetime.now().astimezone().utcoffset()
+        total_seconds = int(utc_offset.total_seconds())
+        hours, remainder = divmod(abs(total_seconds), 3600)
+        minutes = remainder // 60
+        sign = "+" if total_seconds >= 0 else "-"
+        offset_str = f"UTC{sign}{hours:02d}:{minutes:02d}"
+        tz_name = datetime.datetime.now().astimezone().tzname()
+        return {
+            "status": "success",
+            "timezone": tz_name,
+            "utc_offset": offset_str,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 if __name__ == "__main__":
     mcp.run()
