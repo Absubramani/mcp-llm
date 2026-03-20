@@ -88,12 +88,57 @@ def get_llm(key_index: int = 0):
 
 # ── Tools Builder ─────────────────────────────────────────────────────────────
 def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) -> list:
+    # Compressed descriptions sent to LLM to stay within token limits.
+    # Full docstrings are preserved in the MCP server files for code readability.
+    _SHORT_DESC = {
+        # Gmail
+        "list_emails":                "List inbox emails. max_results, query, page_token optional.",
+        "read_email":                 "Read full email by id.",
+        "send_email":                 "Send email. to required. subject/body empty triggers ask flow. cc/bcc optional.",
+        "reply_to_email":             "Reply to email by id. body required.",
+        "forward_email":              "Forward email to another address. email_id, to_email required.",
+        "delete_email":               "Move email to trash. confirmed='true' required.",
+        "restore_email":              "Restore email from trash. confirmed='true' required.",
+        "search_emails":              "Search emails by Gmail query. e.g. from:x@y.com, subject:foo.",
+        "send_email_with_attachment": "Send email with local file attachment. file_path required.",
+        "get_email_attachments":      "List attachments in an email by id.",
+        "download_email_attachment":  "Download attachment. email_id, attachment_id, filename required.",
+        "list_unread_emails":         "List unread inbox emails. max_results, page_token optional.",
+        "mark_as_read":               "Mark emails as read. email_ids: exact id or comma-separated ids.",
+        "mark_as_unread":             "Mark emails as unread. email_ids: exact id or comma-separated ids.",
+        "save_draft":                 "Save email as draft. to required. subject/body empty triggers ask flow.",
+        "list_drafts":                "List all saved drafts.",
+        "update_draft":               "Update draft subject/body/to. Call list_drafts in the same step to get draft_id before calling this.",
+        "send_draft":                 "Send a draft. Call list_drafts in the same step to get draft_id before calling this.",
+        "delete_draft":               "Delete a draft. confirmed='true' required.",
+        "schedule_email":             "Schedule email for later. to, send_at required. subject/body empty triggers ask.",
+        "list_scheduled_emails":      "List all scheduled emails.",
+        "cancel_scheduled_email":     "Cancel a scheduled email by job_id.",
+        "get_user_timezone":          "Get system timezone. Only call when user asks for their timezone.",
+        # Drive
+        "create_folder":              "Create folder or nested folders. path required.",
+        "list_files":                 "List files in folder. path empty = root.",
+        "create_text_file":           "Create text file in Drive. path and content required.",
+        "read_file":                  "Read file content from Drive. path required.",
+        "delete_file":                "Move file to trash. confirmed='true' required.",
+        "restore_file":               "Restore file from trash. confirmed='true' required.",
+        "move_file":                  "Move file to another folder.",
+        "rename_file":                "Rename a file or folder.",
+        "copy_file":                  "Copy file to another folder.",
+        "search_files":               "Search files by keyword. NEVER include extension in query.",
+        "get_file_info":              "Get file details: name, type, size, modified date.",
+        "upload_file":                "Upload local file to Drive. file_path required.",
+        "download_file":              "Download Drive file to local machine.",
+        "list_recent_files":          "List recently modified files.",
+        "share_file":                 "Share file with email. role: reader/commenter/writer.",
+    }
+
     langchain_tools = []
 
     for tool in all_tools:
         func_info = tool["function"]
         tool_name = func_info["name"]
-        tool_desc = func_info["description"]
+        tool_desc = _SHORT_DESC.get(tool_name, func_info["description"][:120])
         server_name = tool_server_map.get(tool_name, "drive")
         parameters = func_info.get("parameters", {})
         properties = parameters.get("properties", {})

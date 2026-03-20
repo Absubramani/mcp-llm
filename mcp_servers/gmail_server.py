@@ -196,24 +196,29 @@ def _attach_files(msg: MIMEMultipart, file_paths: list) -> list:
 # ================= TOOLS =================
 
 @mcp.tool()
-def list_emails(max_results: str = "10", query: str = "", num: str = "") -> list:
+def list_emails(max_results: str = "10", query: str = "", num: str = "", page_token: str = "") -> dict:
     """
-    List emails from Gmail inbox.
+    List emails from Gmail inbox with pagination support.
     max_results: number of emails to return (default 10).
     query: optional filter like 'from:someone@gmail.com' or 'subject:hello'.
+    page_token: pass next_page_token from previous result to get next page.
+    Returns: {emails, next_page_token, has_more}
     """
     gmail_service = get_service()
     try:
         count = int(num) if num else int(max_results) if max_results else 10
         q = "in:inbox " + query if query else "in:inbox"
 
-        results = gmail_service.users().messages().list(
-            userId="me", maxResults=count, q=q
-        ).execute()
+        kwargs = dict(userId="me", maxResults=count, q=q)
+        if page_token:
+            kwargs["pageToken"] = page_token
 
+        results = gmail_service.users().messages().list(**kwargs).execute()
         messages = results.get("messages", [])
+        next_token = results.get("nextPageToken", "")
+
         if not messages:
-            return [{"message": "No emails found."}]
+            return {"emails": [], "message": "No emails found.", "next_page_token": "", "has_more": False}
 
         emails = []
         for msg in messages:
@@ -222,6 +227,7 @@ def list_emails(max_results: str = "10", query: str = "", num: str = "") -> list
                 metadataHeaders=["From", "Subject", "Date"]
             ).execute()
             headers = detail.get("payload", {}).get("headers", [])
+            label_ids = detail.get("labelIds", [])
             emails.append({
                 "id": msg["id"],
                 "thread_id": detail.get("threadId"),
@@ -229,11 +235,16 @@ def list_emails(max_results: str = "10", query: str = "", num: str = "") -> list
                 "subject": parse_headers(headers, "Subject"),
                 "date": parse_headers(headers, "Date"),
                 "snippet": detail.get("snippet", ""),
+                "unread": "UNREAD" in label_ids,
             })
 
-        return emails
+        return {
+            "emails": emails,
+            "next_page_token": next_token,
+            "has_more": bool(next_token),
+        }
     except Exception as e:
-        return [{"status": "error", "message": str(e)}]
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
@@ -451,21 +462,27 @@ def restore_email(email_id: str, confirmed: str = "") -> dict:
 
 
 @mcp.tool()
-def search_emails(query: str, max_results: str = "10") -> list:
+def search_emails(query: str, max_results: str = "10", page_token: str = "") -> dict:
     """
-    Search emails using Gmail query syntax.
+    Search emails using Gmail query syntax with pagination support.
     Examples: 'from:boss@gmail.com', 'subject:invoice', 'in:trash test', 'after:2024/01/01'
+    page_token: pass next_page_token from previous result to get next page.
+    Returns: {emails, next_page_token, has_more}
     """
     gmail_service = get_service()
     try:
         count = int(max_results) if max_results else 10
-        results = gmail_service.users().messages().list(
-            userId="me", maxResults=count, q=query
-        ).execute()
 
+        kwargs = dict(userId="me", maxResults=count, q=query)
+        if page_token:
+            kwargs["pageToken"] = page_token
+
+        results = gmail_service.users().messages().list(**kwargs).execute()
         messages = results.get("messages", [])
+        next_token = results.get("nextPageToken", "")
+
         if not messages:
-            return [{"message": f"No emails found for: {query}"}]
+            return {"emails": [], "message": f"No emails found for: {query}", "next_page_token": "", "has_more": False}
 
         emails = []
         for msg in messages:
@@ -474,17 +491,23 @@ def search_emails(query: str, max_results: str = "10") -> list:
                 metadataHeaders=["From", "Subject", "Date"]
             ).execute()
             headers = detail.get("payload", {}).get("headers", [])
+            label_ids = detail.get("labelIds", [])
             emails.append({
                 "id": msg["id"],
                 "from": parse_headers(headers, "From"),
                 "subject": parse_headers(headers, "Subject"),
                 "date": parse_headers(headers, "Date"),
                 "snippet": detail.get("snippet", ""),
+                "unread": "UNREAD" in label_ids,
             })
 
-        return emails
+        return {
+            "emails": emails,
+            "next_page_token": next_token,
+            "has_more": bool(next_token),
+        }
     except Exception as e:
-        return [{"status": "error", "message": str(e)}]
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
@@ -788,7 +811,7 @@ def schedule_email(
 def list_scheduled_emails(max_results: str = "10") -> list:
     """
     List all emails currently queued for scheduled delivery.
-    Returns job_id, recipient, subject, and scheduled send time.
+    Returns job_id, recipient, subject, body, and scheduled send time.
     """
     try:
         count = int(max_results) if max_results else 10
@@ -872,6 +895,479 @@ def get_user_timezone() -> dict:
             "timezone": tz_name,
             "utc_offset": offset_str,
         }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UNREAD EMAILS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def list_unread_emails(max_results: str = "10", page_token: str = "") -> dict:
+    """
+    List only unread emails from Gmail inbox with pagination.
+    max_results: number of emails to return (default 10).
+    page_token: pass next_page_token from previous result to get next page.
+    Returns: {emails, next_page_token, has_more, unread_count}
+    """
+    gmail_service = get_service()
+    try:
+        count = int(max_results) if max_results else 10
+        kwargs = dict(userId="me", maxResults=count, q="in:inbox is:unread")
+        if page_token:
+            kwargs["pageToken"] = page_token
+
+        results = gmail_service.users().messages().list(**kwargs).execute()
+        messages = results.get("messages", [])
+        next_token = results.get("nextPageToken", "")
+
+        if not messages:
+            return {
+                "emails": [],
+                "message": "No unread emails found.",
+                "next_page_token": "",
+                "has_more": False,
+                "unread_count": 0,
+            }
+
+        emails = []
+        for msg in messages:
+            detail = gmail_service.users().messages().get(
+                userId="me", id=msg["id"], format="metadata",
+                metadataHeaders=["From", "Subject", "Date"]
+            ).execute()
+            headers = detail.get("payload", {}).get("headers", [])
+            emails.append({
+                "id":       msg["id"],
+                "from":     parse_headers(headers, "From"),
+                "subject":  parse_headers(headers, "Subject"),
+                "date":     parse_headers(headers, "Date"),
+                "snippet":  detail.get("snippet", ""),
+                "unread":   True,
+            })
+
+        return {
+            "emails":          emails,
+            "next_page_token": next_token,
+            "has_more":        bool(next_token),
+            "unread_count":    len(emails),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def mark_as_read(email_ids: str) -> dict:
+    """
+    Mark one or more emails as read.
+    email_ids: single email id OR comma-separated list of ids for bulk operation.
+    Example: mark_as_read('id1') or mark_as_read('id1,id2,id3')
+    CRITICAL: Use EXACT id values from list_emails or list_unread_emails results.
+    NEVER pass a number like '1' or '2' — always use the full id string.
+    """
+    gmail_service = get_service()
+    try:
+        ids = [i.strip() for i in email_ids.split(",") if i.strip()]
+        if not ids:
+            return {"status": "error", "message": "No email ids provided."}
+
+        # Reject if any id looks like a position number instead of a real Gmail id
+        invalid = [i for i in ids if i.isdigit() or len(i) < 8]
+        if invalid:
+            return {
+                "status":  "error",
+                "message": (
+                    f"Invalid email id(s): {', '.join(invalid)}. "
+                    "You must use the exact id from list_emails results (e.g. '19ce68f85eb2120e'), "
+                    "not a position number. Call list_unread_emails first to get the real ids."
+                ),
+            }
+
+        success, failed = [], []
+        subjects = []
+        for email_id in ids:
+            try:
+                gmail_service.users().messages().modify(
+                    userId="me",
+                    id=email_id,
+                    body={"removeLabelIds": ["UNREAD"]}
+                ).execute()
+                # Fetch subject for confirmation message
+                try:
+                    detail = gmail_service.users().messages().get(
+                        userId="me", id=email_id, format="metadata",
+                        metadataHeaders=["Subject"]
+                    ).execute()
+                    subj = parse_headers(detail.get("payload", {}).get("headers", []), "Subject")
+                    subjects.append(subj or email_id)
+                except Exception:
+                    subjects.append(email_id)
+                success.append(email_id)
+            except Exception as e:
+                failed.append({"id": email_id, "error": str(e)})
+
+        if failed:
+            return {
+                "status":  "partial",
+                "message": f"Marked {len(success)} email(s) as read. {len(failed)} failed.",
+                "success": success,
+                "failed":  failed,
+            }
+        subject_str = subjects[0] if len(subjects) == 1 else f"{len(subjects)} emails"
+        return {
+            "status":   "success",
+            "message":  f"Marked {len(success)} email(s) as read successfully.",
+            "subject":  subject_str,
+            "count":    len(success),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def mark_as_unread(email_ids: str) -> dict:
+    """
+    Mark one or more emails as unread.
+    email_ids: single email id OR comma-separated list of ids for bulk operation.
+    Example: mark_as_unread('id1') or mark_as_unread('id1,id2,id3')
+    CRITICAL: Use EXACT id values from list_emails or list_unread_emails results.
+    NEVER pass a number like '1' or '2' — always use the full id string.
+    """
+    gmail_service = get_service()
+    try:
+        ids = [i.strip() for i in email_ids.split(",") if i.strip()]
+        if not ids:
+            return {"status": "error", "message": "No email ids provided."}
+
+        # Reject if any id looks like a position number instead of a real Gmail id
+        invalid = [i for i in ids if i.isdigit() or len(i) < 8]
+        if invalid:
+            return {
+                "status":  "error",
+                "message": (
+                    f"Invalid email id(s): {', '.join(invalid)}. "
+                    "You must use the exact id from list_emails results (e.g. '19ce68f85eb2120e'), "
+                    "not a position number. Call list_unread_emails first to get the real ids."
+                ),
+            }
+
+        success, failed = [], []
+        for email_id in ids:
+            try:
+                gmail_service.users().messages().modify(
+                    userId="me",
+                    id=email_id,
+                    body={"addLabelIds": ["UNREAD"]}
+                ).execute()
+                success.append(email_id)
+            except Exception as e:
+                failed.append({"id": email_id, "error": str(e)})
+
+        if failed:
+            return {
+                "status":  "partial",
+                "message": f"Marked {len(success)} email(s) as unread. {len(failed)} failed.",
+                "success": success,
+                "failed":  failed,
+            }
+        return {
+            "status":  "success",
+            "message": f"Marked {len(success)} email(s) as unread successfully.",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DRAFT EMAILS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def save_draft(
+    to: str,
+    subject: str = "",
+    body: str = "",
+    cc: str = "",
+    bcc: str = ""
+) -> dict:
+    """
+    Save an email as a draft without sending it.
+    to: recipient email address.
+    subject: email subject — leave empty if not yet collected from user.
+    body: email body text — leave empty if not yet collected from user.
+    cc: CC addresses (optional).
+    bcc: BCC addresses (optional).
+    If only subject given — ask for body. If only body given — ask for subject.
+    If both empty — ask for both. If both given — save immediately.
+    """
+    subject = _clean_field(subject)
+    body    = _clean_field(body)
+
+    # Both missing — ask for both
+    if not subject and not body:
+        return {
+            "status":  "need_subject_and_body",
+            "message": 'What should the **subject** and **message body** be?\n(Say "no subject" or "no body" to skip either)',
+        }
+
+    # Only subject given — ask for body
+    if subject and not body:
+        return {
+            "status":  "need_body",
+            "message": f'What should the **message body** be for this draft?\n(Say "no body" to skip)',
+            "subject": subject,
+        }
+
+    # Only body given — ask for subject
+    if body and not subject:
+        return {
+            "status":  "need_subject",
+            "message": f'What should the **subject** be for this draft?\n(Say "no subject" to skip)',
+            "body": body,
+        }
+
+    gmail_service = get_service()
+    try:
+        payload = build_message(to, subject, body, cc=cc, bcc=bcc)
+        draft = gmail_service.users().drafts().create(
+            userId="me",
+            body={"message": {"raw": payload["raw"]}}
+        ).execute()
+
+        return {
+            "status":   "success",
+            "message":  "Draft saved successfully.",
+            "draft_id": draft["id"],
+            "to":       to,
+            "subject":  subject or "(no subject)",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def list_drafts(max_results: str = "10") -> list:
+    """
+    List all saved email drafts.
+    max_results: number of drafts to return (default 10).
+    Returns list of drafts with draft_id, to, subject, snippet.
+    """
+    gmail_service = get_service()
+    try:
+        count = int(max_results) if max_results else 10
+        results = gmail_service.users().drafts().list(
+            userId="me", maxResults=count
+        ).execute()
+
+        drafts_list = results.get("drafts", [])
+        if not drafts_list:
+            return [{"message": "No drafts found."}]
+
+        drafts = []
+        for d in drafts_list:
+            try:
+                detail = gmail_service.users().drafts().get(
+                    userId="me", id=d["id"], format="metadata"
+                ).execute()
+                msg     = detail.get("message", {})
+                headers = msg.get("payload", {}).get("headers", [])
+                drafts.append({
+                    "draft_id": d["id"],
+                    "to":       parse_headers(headers, "To"),
+                    "subject":  parse_headers(headers, "Subject") or "(no subject)",
+                    "snippet":  msg.get("snippet", ""),
+                    "date":     parse_headers(headers, "Date"),
+                })
+            except Exception:
+                continue
+
+        if not drafts:
+            return [{"message": "No drafts found."}]
+
+        return drafts
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
+
+
+
+@mcp.tool()
+def update_draft(
+    draft_id: str,
+    subject: str = "",
+    body: str = "",
+    to: str = "",
+    cc: str = "",
+    bcc: str = ""
+) -> dict:
+    """
+    Update an existing draft — change subject, body, recipient, cc, or bcc.
+    draft_id: exact draft_id from list_drafts results.
+    Only provide fields you want to update — others are kept as-is.
+    CRITICAL: ALWAYS call list_drafts first to get the real draft_id.
+    NEVER pass a number like 1 or 2 as draft_id.
+    """
+    gmail_service = get_service()
+    try:
+        # Reject invalid ids — auto-fetch list so LLM can pick the right one
+        if draft_id.isdigit() or len(draft_id) < 8 or draft_id.startswith('['):
+            results = gmail_service.users().drafts().list(userId="me", maxResults=10).execute()
+            drafts_list = results.get("drafts", [])
+            if not drafts_list:
+                return {"status": "error", "message": "No drafts found."}
+            drafts = []
+            for d in drafts_list:
+                try:
+                    detail = gmail_service.users().drafts().get(
+                        userId="me", id=d["id"], format="metadata"
+                    ).execute()
+                    msg = detail.get("message", {})
+                    headers = msg.get("payload", {}).get("headers", [])
+                    drafts.append({
+                        "draft_id": d["id"],
+                        "to":      parse_headers(headers, "To"),
+                        "subject": parse_headers(headers, "Subject") or "(no subject)",
+                    })
+                except Exception:
+                    continue
+            return {
+                "status":  "need_draft_id",
+                "message": "Invalid draft_id. Use the exact draft_id from the list below.",
+                "drafts":  drafts,
+            }
+
+        # Fetch existing draft content
+        detail  = gmail_service.users().drafts().get(
+            userId="me", id=draft_id, format="full"
+        ).execute()
+        msg     = detail.get("message", {})
+        headers = msg.get("payload", {}).get("headers", [])
+
+        # Use existing values for fields not being updated
+        final_to      = _clean_field(to)      or parse_headers(headers, "To")
+        final_subject = _clean_field(subject) or parse_headers(headers, "Subject") or ""
+        final_cc      = _clean_field(cc)      or parse_headers(headers, "Cc") or ""
+        final_bcc     = _clean_field(bcc)     or parse_headers(headers, "Bcc") or ""
+
+        # Get existing body if not updating
+        final_body = _clean_field(body)
+        if not final_body:
+            final_body = get_email_body(msg.get("payload", {}))
+            if final_body == "No body content.":
+                final_body = ""
+
+        # Build updated message
+        payload = build_message(final_to, final_subject, final_body, cc=final_cc, bcc=final_bcc)
+
+        # Update the draft
+        gmail_service.users().drafts().update(
+            userId="me",
+            id=draft_id,
+            body={"message": {"raw": payload["raw"]}}
+        ).execute()
+
+        return {
+            "status":   "success",
+            "message":  f"Draft updated successfully.",
+            "draft_id": draft_id,
+            "to":       final_to,
+            "subject":  final_subject or "(no subject)",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def send_draft(draft_id: str) -> dict:
+    """
+    Send an existing draft email and delete it after sending.
+    draft_id: exact draft_id from list_drafts results.
+    CRITICAL: ALWAYS call list_drafts first to get the real draft_id.
+    NEVER pass a number like '1' or '2' — always use the full draft_id string.
+    """
+    gmail_service = get_service()
+    try:
+        # Reject position numbers — force LLM to use real ids
+        if draft_id.isdigit() or len(draft_id) < 8:
+            # Auto-fetch drafts and return them so LLM can pick the right one
+            gmail_service2 = get_service()
+            results = gmail_service2.users().drafts().list(userId="me", maxResults=10).execute()
+            drafts_list = results.get("drafts", [])
+            if not drafts_list:
+                return {"status": "error", "message": "No drafts found."}
+            drafts = []
+            for d in drafts_list:
+                try:
+                    detail = gmail_service2.users().drafts().get(
+                        userId="me", id=d["id"], format="metadata"
+                    ).execute()
+                    msg = detail.get("message", {})
+                    headers = msg.get("payload", {}).get("headers", [])
+                    drafts.append({
+                        "draft_id": d["id"],
+                        "to":      parse_headers(headers, "To"),
+                        "subject": parse_headers(headers, "Subject") or "(no subject)",
+                    })
+                except Exception:
+                    continue
+            return {
+                "status":  "need_draft_id",
+                "message": "Please use the exact draft_id from the list below, not a number.",
+                "drafts":  drafts,
+            }
+
+        # Fetch draft details for confirmation message
+        detail  = gmail_service.users().drafts().get(
+            userId="me", id=draft_id, format="metadata"
+        ).execute()
+        msg     = detail.get("message", {})
+        headers = msg.get("payload", {}).get("headers", [])
+        to      = parse_headers(headers, "To")
+        subject = parse_headers(headers, "Subject") or "(no subject)"
+
+        # Send the draft — Gmail auto-deletes draft on send
+        gmail_service.users().drafts().send(
+            userId="me",
+            body={"id": draft_id}
+        ).execute()
+
+        return {
+            "status":  "success",
+            "message": f"Draft sent to **{to}** successfully and removed from drafts.",
+            "to":      to,
+            "subject": subject,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def delete_draft(draft_id: str, confirmed: str = "") -> dict:
+    """
+    Delete a draft email permanently.
+    draft_id: exact draft_id from list_drafts results.
+    Call first without confirmed to show details.
+    Call with confirmed='true' after user confirms.
+    """
+    gmail_service = get_service()
+    try:
+        detail  = gmail_service.users().drafts().get(
+            userId="me", id=draft_id, format="metadata"
+        ).execute()
+        msg     = detail.get("message", {})
+        headers = msg.get("payload", {}).get("headers", [])
+        to      = parse_headers(headers, "To")
+        subject = parse_headers(headers, "Subject") or "(no subject)"
+
+        if confirmed != "true":
+            return {
+                "status":  "confirmation_required",
+                "message": f"Delete draft to **{to}** | Subject: **{subject}**?",
+                "draft_id": draft_id,
+            }
+
+        gmail_service.users().drafts().delete(userId="me", id=draft_id).execute()
+        return {"status": "success", "message": f"Draft '{subject}' deleted successfully."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 

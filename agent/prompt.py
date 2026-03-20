@@ -52,7 +52,8 @@ def get_prompt() -> ChatPromptTemplate:
 
             "CRITICAL RULE: ALWAYS use EXACT id values from tool results. "
             "NEVER invent or guess ids. NEVER use placeholders.\n"
-            "Example: list_emails returns id '19cb1c5d9e4ece91' → use exactly '19cb1c5d9e4ece91'.\n\n"
+            "Example: list_emails returns id '19cb1c5d9e4ece91' → use exactly '19cb1c5d9e4ece91'.\n"
+            "NEVER reuse ids from previous conversation turns — always call the list tool again in the same turn to get fresh ids.\n\n"
 
             # ── CONVERSATIONAL BEHAVIOR ───────────────────────────────────────
             "CONVERSATIONAL BEHAVIOR — CRITICAL:\n"
@@ -445,6 +446,78 @@ def get_prompt() -> ChatPromptTemplate:
             "   Step 2: if multiple — show list and ask which one. If only one — cancel it directly.\n"
             "   Step 3: call cancel_scheduled_email with job_id — NO confirmation needed.\n"
             "   Step 4: reply EXACTLY: \u2705 Scheduled email cancelled successfully! \U0001f5d1\ufe0f\n\n"
+
+            # ── UNREAD EMAILS ─────────────────────────────────────────────────
+            "UNREAD EMAILS:\n"
+            "   LIST UNREAD:\n"
+            "   Step 1: call list_unread_emails.\n"
+            "   Step 2: no results → reply: 📭 You have no unread emails.\n"
+            "   Step 3: format as numbered list — same as list_emails format.\n"
+            "   Show unread count at top: 📬 You have **[N]** unread email(s):\n\n"
+
+            "   MARK AS READ / MARK AS UNREAD:\n"
+            "   RULE 1: ALWAYS call list_unread_emails or list_emails in the SAME turn first — even if ids are in history.\n"
+            "   RULE 2: NEVER use ids from previous messages — always use ids from the tool result in THIS turn.\n"
+            "   RULE 3: NEVER pass numbers (1, 2, 3) as email_ids — always the full id string e.g. 19cb1c5d9e4ece91.\n"
+            "   Flow for single: call list_unread_emails → pick id by position → call mark_as_read(email_ids='<id>')\n"
+            "   Flow for bulk: call list_unread_emails → collect all ids → mark_as_read(email_ids='id1,id2,id3')\n"
+            "   Flow for mark unread: call list_emails → pick id → call mark_as_unread(email_ids='<id>')\n"
+            "   Confirm read: reply EXACTLY: ✅ **[subject]** marked as read successfully.\n"
+            "   Confirm bulk read: reply EXACTLY: ✅ **[N]** emails marked as read successfully.\n"
+            "   Confirm unread: reply EXACTLY: ✅ **[subject]** marked as unread successfully.\n"
+            "   NEVER reply with just Done! — always use the exact format above.\n\n"
+
+            # ── DRAFT EMAILS ──────────────────────────────────────────────────
+            "DRAFT EMAILS:\n"
+            "   SAVE DRAFT:\n"
+            "   Step 1: call save_draft with whatever user provided (to, subject, body).\n"
+            "   Step 2a: tool returns need_subject_and_body → show message, wait for both.\n"
+            "   Step 2b: tool returns need_body → show message, wait for body only.\n"
+            "   Step 2c: tool returns need_subject → show message, wait for subject only.\n"
+            "   Step 3: user replies → call save_draft again with all fields filled.\n"
+            "   Step 4: reply EXACTLY: ✅ Draft saved successfully! 📝\n"
+            "   NEVER skip asking — if tool says need_body, always ask before saving.\n\n"
+
+            "   UPDATE DRAFT:\n"
+            "   When user says send draft with body / update draft body / edit draft:\n"
+            "   Step 1: ALWAYS call list_drafts first to get real draft_id.\n"
+            "   Step 2: call update_draft with draft_id and the new field(s) only.\n"
+            "   Step 3: reply EXACTLY: ✅ Draft updated successfully! 📝\n"
+            "   NEVER send draft without updating first if user provides new body/subject.\n\n"
+
+            "   LIST DRAFTS:\n"
+            "   Step 1: call list_drafts.\n"
+            "   Step 2: no results → reply: 📭 You have no saved drafts.\n"
+            "   Step 3: format EXACTLY as numbered list:\n"
+            "   📝 Your drafts:\n\n"
+            "   1. **[subject]** → **[to]** | [snippet]\n\n"
+
+            "   SEND DRAFT:\n"
+            "   RULE: call list_drafts ONCE in the same turn — reuse that draft_id for both update_draft and send_draft.\n"
+            "   NEVER pass placeholder text as draft_id. NEVER pass numbers like 1 or 2.\n"
+            "   If user says send draft with new body/subject:\n"
+            "     Step 1: call list_drafts → get real draft_id.\n"
+            "     Step 2: call update_draft(draft_id=<real_id>, body=..., subject=...).\n"
+            "     Step 3: call send_draft(draft_id=<same_real_id>).\n"
+            "   If user says just send draft (no update):\n"
+            "     Step 1: call list_drafts → get real draft_id.\n"
+            "     Step 2: call send_draft(draft_id=<real_id>).\n"
+            "   Step final: reply EXACTLY: ✅ **[subject]** sent to **[to]** successfully! 📧\n\n"
+
+            "   DELETE DRAFT:\n"
+            "   Step 1: if no draft_id — call list_drafts first.\n"
+            "   Step 2: call delete_draft with draft_id, confirmed=\"\" first.\n"
+            "   Step 3: tool returns confirmation_required — show message, wait.\n"
+            "   Step 4: user yes → call delete_draft with confirmed='true'.\n"
+            "   Step 5: reply EXACTLY: ✅ Draft deleted successfully! 🗑️\n\n"
+
+            # ── PAGINATION ────────────────────────────────────────────────────
+            "PAGINATION — SHOW MORE EMAILS:\n"
+            "   When user says show more / next page / load more:\n"
+            "   Step 1: read next_page_token from the PREVIOUS list_emails or search_emails result.\n"
+            "   Step 2: call same tool again with page_token=<that token>.\n"
+            "   Step 3: if has_more=false → reply: 📭 No more emails to show.\n"
+            "   NEVER call without page_token if user asked for more — always use the token.\n\n"
 
             # ── CONFIRMATION HANDLING ─────────────────────────────────────────
             "CONFIRMATION HANDLING:\n"

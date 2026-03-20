@@ -98,14 +98,20 @@ def _delete_job(job_id: str):
 
 # ── Gmail sender ──────────────────────────────────────────────────────────────
 def _get_gmail_service(creds_file: str):
-    """Build Gmail service, refreshing token if expired."""
+    """Build Gmail service. Falls back to token.pickle if temp creds file is gone."""
+    if not Path(creds_file).exists():
+        fallback = BASE_DIR / "token.pickle"
+        if fallback.exists():
+            log.warning(f"Creds file gone, falling back to token.pickle")
+            creds_file = str(fallback)
+        else:
+            raise FileNotFoundError(f"No valid creds file found")
     with open(creds_file, "rb") as f:
         creds = pickle.load(f)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
         with open(creds_file, "wb") as f:
             pickle.dump(creds, f)
-        log.info(f"Token refreshed for {creds_file}")
     return build("gmail", "v1", credentials=creds)
 
 

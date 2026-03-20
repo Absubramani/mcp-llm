@@ -26,8 +26,6 @@ schedule email to abalasubramanir@gmail.com at Friday 3pm
 schedule email to abalasubramanir@gmail.com next Monday 10am
 show my scheduled emails
 cancel my scheduled email
-schedule email to abalasubramanir@gmail.com in 2 minutes
-(wait 2 minutes and check inbox)
 
 
 === SPELLING TESTS ===

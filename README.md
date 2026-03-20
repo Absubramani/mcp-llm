@@ -1,6 +1,6 @@
- # 🤖 AI Assistant — Gmail & Google Drive Agent
+# 🤖 AI Assistant — Gmail & Google Drive Agent
 
-A production-level conversational AI assistant that manages your Gmail and Google Drive using natural language. Built with LangChain, MCP (Model Context Protocol), Groq (LLaMA 3.3 70B), and Streamlit.
+A conversational AI assistant that manages your Gmail and Google Drive using natural language. Built with LangChain, MCP (Model Context Protocol), Groq (LLaMA 3.3 70B), and Streamlit.
 
 ---
 
@@ -15,6 +15,8 @@ A production-level conversational AI assistant that manages your Gmail and Googl
 - Download email attachments
 - Save attachments to Google Drive
 - Send emails with Drive file attachments
+- Schedule emails for future delivery
+- List and cancel scheduled emails
 
 ### Google Drive
 - List, search, and view files
@@ -42,10 +44,13 @@ A production-level conversational AI assistant that manages your Gmail and Googl
 ---
 
 ## 🗂️ Project Structure
+
 ```
 mcp-llm/
 ├── app.py                  # Streamlit UI + OAuth callback
+├── scheduler.py            # Long-running scheduled email delivery process
 ├── requirements.txt        # Python dependencies
+├── run.sh                  # Starts app + scheduler together
 ├── oauth-client.json       # Google OAuth credentials (not committed)
 ├── .env                    # Environment variables (not committed)
 │
@@ -59,10 +64,11 @@ mcp-llm/
 │
 ├── mcp_servers/
 │   ├── drive_server.py     # Google Drive MCP server (15+ tools)
-│   └── gmail_server.py     # Gmail MCP server (11+ tools)
+│   └── gmail_server.py     # Gmail MCP server (15+ tools)
 │
 ├── logs/                   # Auto-created — daily log files
-└── tokens/                 # Auto-created — per-user OAuth tokens
+├── tokens/                 # Auto-created — per-user OAuth tokens
+└── scheduled_emails.db     # Auto-created — scheduled email job queue
 ```
 
 ---
@@ -96,16 +102,32 @@ LLM_PROVIDER=groq
 GROQ_API_KEY_1=your_first_groq_key
 GROQ_API_KEY_2=your_second_groq_key
 GROQ_API_KEY_3=your_third_groq_key
+
+# Optional — Mistral fallback (recommended)
+MISTRAL_API_KEY=your_mistral_key
 ```
 
 Get free Groq API keys at [console.groq.com](https://console.groq.com)
+Get Mistral API keys at [console.mistral.ai](https://console.mistral.ai)
 
 > Set `LLM_PROVIDER=ollama` to use local Ollama instead of Groq.
 
 ### 5. Run
 ```bash
+# Recommended — starts both app and scheduler together
+bash run.sh
+```
+
+Or manually in two terminals:
+```bash
+# Terminal 1 — scheduler (required for scheduled emails)
+python scheduler.py
+
+# Terminal 2 — app
 streamlit run app.py
 ```
+
+> ⚠️ If you only run `streamlit run app.py` without `scheduler.py`, the app works but scheduled emails will never be delivered.
 
 Open [http://localhost:8501](http://localhost:8501) in your browser.
 
@@ -119,16 +141,18 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | `GROQ_API_KEY_1` | If Groq | First Groq API key |
 | `GROQ_API_KEY_2` | Optional | Second key — fallback |
 | `GROQ_API_KEY_3` | Optional | Third key — fallback |
+| `MISTRAL_API_KEY` | Optional | Mistral fallback key (recommended) |
 
 ---
 
 ## 🤖 LLM Architecture
+
 ```
 User Input
     ↓
 LangChain Agent (create_openai_tools_agent)
     ↓
-Groq Key 1 → Key 2 → Key 3 → Ollama (fallback chain)
+Groq Key 1 → Key 2 → Key 3 → Mistral → Ollama (fallback chain)
     ↓
 MCP Tool Call
     ↓
@@ -141,8 +165,30 @@ Structured Response
 
 **Fallback logic:**
 - Rate limited → try next Groq key
-- All Groq keys exhausted → fall to Ollama
+- All Groq keys exhausted → fall to Mistral
+- Mistral unavailable → fall to Ollama
 - Keys reset daily
+
+---
+
+## 📅 Scheduled Emails
+
+The scheduler runs as a companion process alongside the app. It checks the job queue every 30 seconds and sends emails at the exact scheduled time.
+
+```
+gmail_server.py  →  writes job to scheduled_emails.db
+scheduler.py     →  reads jobs every 30s → sends at exact time
+```
+
+Jobs survive app restarts — if the scheduler was offline when a job was due, it sends immediately on next startup.
+
+**Example usage:**
+```
+schedule email to someone@gmail.com at tomorrow 9am
+schedule email to someone@gmail.com at Friday 3pm
+show my scheduled emails
+cancel my scheduled email
+```
 
 ---
 
@@ -162,8 +208,8 @@ Logs are written daily to `logs/app_YYYY-MM-DD.log`:
 
 Use `test.txt` — covers all features in order:
 ```
-Gmail → Spelling → Conversational → Follow-up → Drive → 
-File Types → Upload → Error Handling → Conversation → 
+Gmail → Schedule Email → Spelling → Conversational → Follow-up → Drive →
+File Types → Upload → Error Handling → Conversation →
 Multi-user → Session Persistence
 ```
 
@@ -204,9 +250,12 @@ LLM_PROVIDER=ollama
 | `streamlit` | Web UI |
 | `langchain` | Agent framework |
 | `langchain-groq` | Groq LLM integration |
+| `langchain-openai` | Mistral LLM integration |
 | `langchain-ollama` | Ollama LLM integration |
 | `mcp` | Model Context Protocol |
 | `google-api-python-client` | Gmail + Drive APIs |
+| `apscheduler` | Scheduled email delivery |
+| `dateparser` | Natural language time parsing |
 | `pdfplumber` | PDF reading |
 | `python-docx` | DOCX reading |
 | `openpyxl` | XLSX reading |
