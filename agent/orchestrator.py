@@ -7,13 +7,64 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from pydantic import Field, create_model
 from agent.tool_schema import fetch_tools
-from agent.tool_executor import execute_tool
+from agent.tool_executor import execute_tool, get_last_tool_result
 from agent.prompt import get_prompt
+
+
+# ── Section Router ────────────────────────────────────────────────────────────
+def _detect_sections(user_input: str) -> list:
+    """
+    Detect which tool sections are needed based on user input.
+    Returns list of active sections — only those sections are included
+    in the system prompt, keeping token count low.
+    """
+    lower = user_input.lower()
+
+    gmail_words  = [
+        "email", "mail", "inbox", "draft", "send", "reply", "forward",
+        "attachment", "schedule", "unread", "read", "mark", "trash",
+        "restore", "cc", "bcc", "subject", "compose", "gmail",
+    ]
+    drive_words  = [
+        "file", "folder", "drive", "upload", "download", "document",
+        "sheet", "spreadsheet", "slides", "pdf", "docx", "xlsx", "pptx",
+        "txt", "csv", "create", "rename", "move", "copy", "share",
+        "recent", "search", "find", "open", "read", "summarize",
+    ]
+    github_words = [
+        "repo", "repository", "repositories", "issue", "issues",
+        "pull request", "pull requests", "pr", "prs", "github", "branch", "commit",
+        "readme", "code", "bug", "feature", "merge", "create repo",
+        "new repo", "files in", "list files", "open pr", "create pr",
+    ]
+
+    sections = []
+    if any(w in lower for w in gmail_words):
+        sections.append("gmail")
+    if any(w in lower for w in drive_words):
+        sections.append("drive")
+    if any(w in lower for w in github_words):
+        sections.append("github")
+
+    # If nothing matched — include all (greetings, unclear input, etc.)
+    if not sections:
+        sections = ["gmail", "drive", "github"]
+
+    return sections
 from agent.logger import log_llm_selected
 from dotenv import load_dotenv
 from pathlib import Path
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env", override=True)
+
+
+# ── LangChain 0.2.x NoneType tool input bug ───────────────────────────────────
+# Fixed directly in .venv/lib/python3.11/site-packages/langchain/agents/
+# output_parsers/tools.py — two line changes:
+#   if "__arg1" in _tool_input  →  if _tool_input and "__arg1" in _tool_input
+#   tool_input = _tool_input    →  tool_input = _tool_input or {}
+# No monkey-patch needed here since the source file is fixed.
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Input Preprocessor ────────────────────────────────────────────────────────
@@ -87,7 +138,12 @@ def get_llm(key_index: int = 0):
 
 
 # ── Tools Builder ─────────────────────────────────────────────────────────────
-def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) -> list:
+def build_langchain_tools(
+    all_tools: list,
+    tool_server_map: dict,
+    creds=None,
+    github_token: dict = None,
+) -> list:
     # Compressed descriptions sent to LLM to stay within token limits.
     # Full docstrings are preserved in the MCP server files for code readability.
     _SHORT_DESC = {
@@ -131,6 +187,17 @@ def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) ->
         "download_file":              "Download Drive file to local machine.",
         "list_recent_files":          "List recently modified files.",
         "share_file":                 "Share file with email. role: reader/commenter/writer.",
+        # GitHub
+        "list_repos":                 "List authenticated user's GitHub repos. limit optional.",
+        "create_repo":                "Create a new GitHub repo. name required. description, private, auto_init optional.",
+        "search_repos":               "Search GitHub repositories by keyword. query required.",
+        "list_repo_files":            "List files and folders in a repo directory. repo required. path and branch optional.",
+        "read_file_from_repo":        "Read a file from a GitHub repo. repo and file_path required. branch optional.",
+        "list_issues":                "List issues in a repo. repo required. state: open/closed/all. limit optional.",
+        "create_issue":               "Create a new issue. repo and title required. body and labels optional.",
+        "read_issue":                 "Read a specific issue. repo and issue_number required.",
+        "list_pull_requests":         "List pull requests in a repo. repo required. state: open/closed/all.",
+        "create_pull_request":        "Create a pull request. repo, title, head required. base defaults to main. body optional.",
     }
 
     langchain_tools = []
@@ -162,17 +229,29 @@ def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) ->
 
         ArgsModel = create_model(f"{tool_name}Args", **fields)
 
-        def make_tool_fn(t_name, s_name, user_creds):
+        def make_tool_fn(t_name, s_name, user_creds, gh_token):
+            # GitHub tools — never drop args, even empty strings
+            # because required fields like 'name' must always reach execute_tool
+            _gh_tools = {
+                "list_repos", "create_repo", "search_repos", "list_repo_files",
+                "read_file_from_repo", "list_issues", "create_issue",
+                "read_issue", "list_pull_requests", "create_pull_request",
+            }
             def tool_fn(**kwargs) -> str:
                 kwargs.pop("dummy", None)
-                kwargs = {k: v for k, v in kwargs.items() if v != ""}
-                return execute_tool(s_name, t_name, kwargs, creds=user_creds)
+                if t_name not in _gh_tools:
+                    kwargs = {k: v for k, v in kwargs.items() if v != ""}
+                return execute_tool(
+                    s_name, t_name, kwargs,
+                    creds=user_creds,
+                    github_token=gh_token,
+                )
             tool_fn.__name__ = t_name
             tool_fn.__doc__ = tool_desc
             return tool_fn
 
         langchain_tool = StructuredTool.from_function(
-            func=make_tool_fn(tool_name, server_name, creds),
+            func=make_tool_fn(tool_name, server_name, creds, github_token),
             name=tool_name,
             description=tool_desc,
             args_schema=ArgsModel,
@@ -183,8 +262,8 @@ def build_langchain_tools(all_tools: list, tool_server_map: dict, creds=None) ->
 
 
 # ── Shared Helpers ────────────────────────────────────────────────────────────
-def _build_agent_executor(llm, langchain_tools):
-    agent = create_openai_tools_agent(llm, langchain_tools, get_prompt())
+def _build_agent_executor(llm, langchain_tools, sections: list = None):
+    agent = create_openai_tools_agent(llm, langchain_tools, get_prompt(sections))
     return AgentExecutor(
         agent=agent,
         tools=langchain_tools,
@@ -195,9 +274,26 @@ def _build_agent_executor(llm, langchain_tools):
     )
 
 
-def _build_chat_history(conversation_history, fallback_hint=None):
+def _build_chat_history(conversation_history, fallback_hint=None, sections=None):
+    """
+    Build chat history keeping only recent messages.
+    Limit varies by active sections to stay within Groq token limits:
+    - GitHub only: 4 messages (prompt is smaller but tool results can be large)
+    - Gmail only: 4 messages (prompt is larger)
+    - Drive only: 4 messages
+    - Mixed/all: 2 messages (largest prompt, least history to fit)
+    """
+    if sections is None:
+        sections = ["gmail", "drive", "github"]
+
+    # Determine history limit based on active sections
+    if len(sections) >= 3:
+        limit = 2   # all sections — smallest history to fit within tokens
+    else:
+        limit = 4   # single or dual section — can afford more history
+
     chat_history = []
-    for msg in conversation_history[-6:]:
+    for msg in conversation_history[-limit:]:
         if msg["role"] == "user":
             chat_history.append(HumanMessage(content=msg["content"]))
         elif msg["role"] == "assistant" and msg.get("content"):
@@ -209,6 +305,9 @@ def _build_chat_history(conversation_history, fallback_hint=None):
 
 def _classify_error(error_str: str) -> str:
     lower = error_str.lower()
+    # 413 token limit — request too large, retrying won't help
+    if "413" in error_str or ("too large" in lower and "token" in lower):
+        return "token_limit"
     if any(x in lower for x in [
         "rate_limit", "rate limit", "429",
         "rate_limit_exceeded", "tokens per day",
@@ -243,6 +342,101 @@ def _get_groq_keys() -> list:
     ] if k]
 
 
+def _parse_tool_result(raw: str) -> list:
+    """
+    Parse tool result into a list of dicts.
+    Handles both JSON array and newline-separated JSON objects
+    (MCP returns each item as a separate JSON object on its own line).
+    """
+    import json
+    if not raw or not raw.strip():
+        return []
+    raw = raw.strip()
+    try:
+        result = json.loads(raw)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return [result]
+    except Exception:
+        pass
+    items = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                items.append(obj)
+        except Exception:
+            continue
+    return items
+
+
+def _format_repos(raw: str) -> str:
+    """Format list_repos tool result into clean markdown."""
+    repos = _parse_tool_result(raw)
+    if not repos:
+        return ""
+    NL = "\n"
+    lines = ["🐙 Your GitHub repositories:" + NL]
+    for i, r in enumerate(repos, 1):
+        name  = r.get("name", "")
+        lang  = r.get("language") or "—"
+        stars = r.get("stars", 0)
+        priv  = " 🔒" if r.get("private") else ""
+        lines.append(f"{i}. **{name}**{priv} | ⭐ {stars} | {lang}")
+    lines.append(NL + "Reply with a repo name to list issues, PRs, or read a file.")
+    return NL.join(lines)
+
+
+def _format_issues(raw: str) -> str:
+    """Format list_issues tool result into clean markdown."""
+    issues = _parse_tool_result(raw)
+    if not issues:
+        return ""
+    NL = "\n"
+    lines = ["🐛 Issues:" + NL]
+    for i, iss in enumerate(issues, 1):
+        num   = iss.get("number", "")
+        title = iss.get("title", "")
+        state = iss.get("state", "")
+        lines.append(f"{i}. **#{num}** {title} | {state}")
+    lines.append(NL + "Reply with a number to read the full issue.")
+    return NL.join(lines)
+
+
+def _format_prs(raw: str) -> str:
+    """Format list_pull_requests tool result into clean markdown."""
+    prs = _parse_tool_result(raw)
+    if not prs:
+        return ""
+    NL = "\n"
+    lines = ["🔀 Pull requests:" + NL]
+    for i, pr in enumerate(prs, 1):
+        num   = pr.get("number", "")
+        title = pr.get("title", "")
+        state = pr.get("state", "")
+        lines.append(f"{i}. **#{num}** {title} | {state}")
+    return NL.join(lines)
+
+
+def _format_search_repos(raw: str) -> str:
+    """Format search_repos tool result into clean markdown."""
+    repos = _parse_tool_result(raw)
+    if not repos:
+        return ""
+    NL = "\n"
+    lines = ["🔍 Search results:" + NL]
+    for i, r in enumerate(repos, 1):
+        name  = r.get("name", "")
+        lang  = r.get("language") or "—"
+        stars = r.get("stars", 0)
+        lines.append(f"{i}. **{name}** | ⭐ {stars} | {lang}")
+    return NL.join(lines)
+
+
 def _smart_reply_from_tools(tools_done: list, user_input: str) -> str:
     """Generate a clean success/summary message based on which tools ran, without needing LLM."""
     import re
@@ -270,6 +464,35 @@ def _smart_reply_from_tools(tools_done: list, user_input: str) -> str:
     # Search + get attachments = list flow — don't show anything, list already rendered
     if "search_emails" in tools_set and "get_email_attachments" in tools_set:
         return ""
+
+    # GitHub smart replies — format directly from stored tool results
+    if "list_repos" in tools_set:
+        raw = get_last_tool_result("list_repos")
+        formatted = _format_repos(raw)
+        return formatted if formatted else "🐙 Repos retrieved — please try again to see them."
+
+    if "list_issues" in tools_set:
+        raw = get_last_tool_result("list_issues")
+        formatted = _format_issues(raw)
+        return formatted if formatted else "🐛 Issues retrieved — please try again to see them."
+
+    if "list_pull_requests" in tools_set:
+        raw = get_last_tool_result("list_pull_requests")
+        formatted = _format_prs(raw)
+        return formatted if formatted else "🔀 PRs retrieved — please try again to see them."
+
+    if "search_repos" in tools_set:
+        raw = get_last_tool_result("search_repos")
+        formatted = _format_search_repos(raw)
+        return formatted if formatted else "🔍 Results retrieved — please try again to see them."
+
+    # GitHub smart replies
+    if "create_repo" in tools_set:
+        return "✅ GitHub repository created successfully! 🐙"
+    if "create_issue" in tools_set:
+        return "✅ GitHub issue created successfully! 🐛"
+    if "create_pull_request" in tools_set:
+        return "✅ Pull request created successfully! 🔀"
 
     # Generic fallback based on last tool
     last = tools_done[-1] if tools_done else ""
@@ -305,6 +528,17 @@ def _handle_exception(
     if error_type == "auth_error":
         log_error_fn(error_str, context=f"user_input={user_input!r}")
         return key_index, True, fallback_hint, "I ran into an issue processing your request. Please try again."
+
+    # Token limit (413) — request too large, retrying with same/other LLM won't help
+    # If tools already ran, generate smart reply from results instead of hallucinating
+    if error_type == "token_limit":
+        tools_done = get_tools_called_fn()
+        if tools_done:
+            log_llm_fallback_fn(key_index + 1 if key_index >= 0 else key_index, error_str)
+            smart_reply = _smart_reply_from_tools(tools_done, user_input)
+            return key_index, True, fallback_hint, smart_reply
+        log_error_fn(error_str, context=f"user_input={user_input!r}")
+        return key_index, True, fallback_hint, "Your request is too large to process. Try asking for fewer items."
 
     # Mistral failed — if tools already ran, generate a smart success/summary message
     if key_index == -2:
@@ -367,6 +601,17 @@ _GARBAGE_MARKERS = [
     '"file_path": "/',
     "Invoking: `upload_file`",
     "Invoking: `download",
+    # GitHub garbage markers
+    'list_repos": {',
+    'create_repo": {',
+    'search_repos": {',
+    'list_repo_files": {',
+    'read_file_from_repo": {',
+    'list_issues": {',
+    'create_issue": {',
+    'read_issue": {',
+    'list_pull_requests": {',
+    'create_pull_request": {',
 ]
 
 
@@ -384,7 +629,7 @@ def _is_garbage_reply(reply: str) -> bool:
         return True
     # Mistral garbled tool call — tool name directly followed by JSON without proper invoke
     import re
-    if re.search(r'(search_emails|list_emails|get_email|download_|upload_file|send_email|search_files|read_file)\s*[א-׿؀-ۿﬀ-﷿]?\s*\{', reply):
+    if re.search(r'(search_emails|list_emails|get_email|download_|upload_file|send_email|search_files|read_file|list_repos|create_repo|search_repos|list_repo_files|read_file_from_repo|list_issues|create_issue|read_issue|list_pull_requests|create_pull_request)\s*[א-׿؀-ۿﬀ-﷿]?\s*\{', reply):
         return True
     # Raw JSON args with no tool invocation wrapper
     if re.search(r'^[a-z_]+\s*\{.*"query"', reply.strip()):
@@ -403,6 +648,7 @@ def run_agent(
     conversation_history: list[dict],
     start_key_index: int = 0,
     creds=None,
+    github_token: dict = None,
 ) -> tuple[str, list[dict], int]:
 
     from agent.logger import log_request, log_response, log_error, log_llm_fallback
@@ -413,8 +659,13 @@ def run_agent(
     reset_tools_called()
     start = time.time()
 
+    sections = _detect_sections(user_input)
     all_tools, tool_server_map = fetch_tools()
-    langchain_tools = build_langchain_tools(all_tools, tool_server_map, creds=creds)
+    langchain_tools = build_langchain_tools(
+        all_tools, tool_server_map,
+        creds=creds,
+        github_token=github_token,
+    )
     groq_keys = _get_groq_keys()
     has_mistral = bool(os.getenv("MISTRAL_API_KEY"))
 
@@ -432,8 +683,8 @@ def run_agent(
         retry_count += 1
 
         llm, key_index = get_llm(key_index)
-        agent_executor = _build_agent_executor(llm, langchain_tools)
-        chat_history = _build_chat_history(conversation_history, fallback_hint)
+        agent_executor = _build_agent_executor(llm, langchain_tools, sections)
+        chat_history = _build_chat_history(conversation_history, fallback_hint, sections)
 
         try:
             result = agent_executor.invoke({
@@ -483,6 +734,7 @@ def run_agent_stream(
     conversation_history: list[dict],
     start_key_index: int = 0,
     creds=None,
+    github_token: dict = None,
 ):
     from agent.logger import log_request, log_response, log_error, log_llm_fallback
     from agent.tool_executor import reset_tools_called, get_tools_called
@@ -492,8 +744,13 @@ def run_agent_stream(
     reset_tools_called()
     start = time.time()
 
+    sections = _detect_sections(user_input)
     all_tools, tool_server_map = fetch_tools()
-    langchain_tools = build_langchain_tools(all_tools, tool_server_map, creds=creds)
+    langchain_tools = build_langchain_tools(
+        all_tools, tool_server_map,
+        creds=creds,
+        github_token=github_token,
+    )
     groq_keys = _get_groq_keys()
     has_mistral = bool(os.getenv("MISTRAL_API_KEY"))
 
@@ -512,8 +769,8 @@ def run_agent_stream(
         retry_count += 1
 
         llm, key_index = get_llm(key_index)
-        agent_executor = _build_agent_executor(llm, langchain_tools)
-        chat_history = _build_chat_history(conversation_history, fallback_hint)
+        agent_executor = _build_agent_executor(llm, langchain_tools, sections)
+        chat_history = _build_chat_history(conversation_history, fallback_hint, sections)
 
         try:
             full_reply = []

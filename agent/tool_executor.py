@@ -11,26 +11,35 @@ from mcp.client.stdio import stdio_client
 from agent.logger import log_tool_call, log_error
 
 MCP_SERVERS = {
-    "drive": Path(__file__).parent.parent / "mcp_servers" / "drive_server.py",
-    "gmail": Path(__file__).parent.parent / "mcp_servers" / "gmail_server.py",
+    "drive":  Path(__file__).parent.parent / "mcp_servers" / "drive_server.py",
+    "gmail":  Path(__file__).parent.parent / "mcp_servers" / "gmail_server.py",
+    "github": Path(__file__).parent.parent / "mcp_servers" / "github_server.py",
 }
 
 # Track tools called in current request
 _tools_called_this_request = []
-_current_creds_file = None
+_current_creds_file        = None
+_current_github_creds_file = None
+_last_tool_results         = {}  # stores last result per tool name for smart reply formatting
 
 
 def reset_tools_called():
-    global _tools_called_this_request
+    global _tools_called_this_request, _last_tool_results
     _tools_called_this_request = []
+    _last_tool_results = {}
 
 
 def get_tools_called():
     return list(_tools_called_this_request)
 
 
+def get_last_tool_result(tool_name: str) -> str:
+    """Get the last result from a specific tool call this request."""
+    return _last_tool_results.get(tool_name, "")
+
+
 def set_current_creds(creds):
-    """Save credentials to temp file for MCP server processes to use."""
+    """Save Google credentials to temp file for MCP server processes to use."""
     global _current_creds_file
     cleanup_creds_file()
     if creds:
@@ -42,8 +51,21 @@ def set_current_creds(creds):
         _current_creds_file = tmp.name
 
 
+def set_current_github_creds(token_data: dict):
+    """Save GitHub token to temp file for MCP server processes to use."""
+    global _current_github_creds_file
+    cleanup_github_creds_file()
+    if token_data:
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".json", prefix="mcp_github_creds_"
+        )
+        with open(tmp.name, "w") as f:
+            json.dump(token_data, f)
+        _current_github_creds_file = tmp.name
+
+
 def cleanup_creds_file():
-    """Delete temp credentials file after request."""
+    """Delete temp Google credentials file."""
     global _current_creds_file
     if _current_creds_file and os.path.exists(_current_creds_file):
         try:
@@ -53,14 +75,31 @@ def cleanup_creds_file():
     _current_creds_file = None
 
 
+def cleanup_github_creds_file():
+    """Delete temp GitHub credentials file."""
+    global _current_github_creds_file
+    if _current_github_creds_file and os.path.exists(_current_github_creds_file):
+        try:
+            os.unlink(_current_github_creds_file)
+        except Exception:
+            pass
+    _current_github_creds_file = None
+
+
 async def execute_tool_async(server_name: str, tool_name: str, tool_args: dict) -> str:
     server_path = MCP_SERVERS.get(server_name)
     if not server_path:
         return f"Error: Unknown server '{server_name}'"
 
     env = os.environ.copy()
+
+    # Pass Google creds
     if _current_creds_file and os.path.exists(_current_creds_file):
         env["MCP_CREDS_FILE"] = _current_creds_file
+
+    # Pass GitHub creds
+    if _current_github_creds_file and os.path.exists(_current_github_creds_file):
+        env["GITHUB_CREDS_FILE"] = _current_github_creds_file
 
     server_params = StdioServerParameters(
         command="python",
@@ -134,6 +173,15 @@ def _sanitize_arg(tool_name: str, key: str, value: str) -> str:
     if not value:
         return value
 
+    # GitHub tools — never sanitize repo names, file paths, or branch names
+    github_tools = {
+        "list_repos", "create_repo", "search_repos", "list_repo_files",
+        "read_file_from_repo", "list_issues", "create_issue",
+        "read_issue", "list_pull_requests", "create_pull_request",
+    }
+    if tool_name in github_tools:
+        return value
+
     # Search query — short keyword, no extension, no underscores
     if key == "query":
         return _sanitize_search_query(value)
@@ -161,12 +209,22 @@ def _sanitize_arg(tool_name: str, key: str, value: str) -> str:
 
 # ── Main Executor ─────────────────────────────────────────────────────────────
 
-def execute_tool(server_name: str, tool_name: str, tool_args, creds=None) -> str:
-    global _tools_called_this_request
+def execute_tool(
+    server_name: str,
+    tool_name: str,
+    tool_args,
+    creds=None,
+    github_token: dict = None,
+) -> str:
+    global _tools_called_this_request, _last_tool_results
 
-    # Set creds if provided — only once per session
+    # Set Google creds if provided
     if creds and not _current_creds_file:
         set_current_creds(creds)
+
+    # Set GitHub creds if provided
+    if github_token and not _current_github_creds_file:
+        set_current_github_creds(github_token)
 
     # ── Parse args ────────────────────────────────────────────────────────────
     if isinstance(tool_args, str):
@@ -194,17 +252,33 @@ def execute_tool(server_name: str, tool_name: str, tool_args, creds=None) -> str
         tool_args = tool_args["args"]
 
     # Drop Ollama meta keys
+    # NOTE: do NOT pop "name" for GitHub tools — create_repo uses "name" as a real arg
+    _github_tool_names = {
+        "list_repos", "create_repo", "search_repos", "list_repo_files",
+        "read_file_from_repo", "list_issues", "create_issue",
+        "read_issue", "list_pull_requests", "create_pull_request",
+    }
     tool_args.pop("function", None)
-    tool_args.pop("name", None)
     tool_args.pop("type", None)
+    if tool_name not in _github_tool_names:
+        tool_args.pop("name", None)
 
     # ── Clean each arg value ──────────────────────────────────────────────────
+    # GitHub tools — never drop any args, even empty strings
+    # because required fields like 'name' must always be preserved
+    github_tool_names = {
+        "list_repos", "create_repo", "search_repos", "list_repo_files",
+        "read_file_from_repo", "list_issues", "create_issue",
+        "read_issue", "list_pull_requests", "create_pull_request",
+    }
+    is_github_tool = tool_name in github_tool_names
+
     cleaned_args = {}
     for k, v in tool_args.items():
         if isinstance(v, str):
             v = v.strip()
-            if not v:
-                continue  # drop empty strings
+            if not v and not is_github_tool:
+                continue  # drop empty strings for non-GitHub tools only
 
             # Handle "1 (some label)" style replies from LLM
             num_match = re.match(r'^\s*(\d+)\s+\(.*\)\s*$', v)
@@ -230,6 +304,7 @@ def execute_tool(server_name: str, tool_name: str, tool_args, creds=None) -> str
         result = asyncio.run(execute_tool_async(server_name, tool_name, tool_args))
         duration = time.time() - start
         _tools_called_this_request.append(tool_name)
+        _last_tool_results[tool_name] = result  # store for smart reply formatting
         log_tool_call(tool_name, tool_args, result, duration)
         return result
     except Exception as e:

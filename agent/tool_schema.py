@@ -4,8 +4,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 MCP_SERVERS = {
-    "drive": Path(__file__).parent.parent / "mcp_servers" / "drive_server.py",
-    "gmail": Path(__file__).parent.parent / "mcp_servers" / "gmail_server.py",
+    "drive":  Path(__file__).parent.parent / "mcp_servers" / "drive_server.py",
+    "gmail":  Path(__file__).parent.parent / "mcp_servers" / "gmail_server.py",
+    "github": Path(__file__).parent.parent / "mcp_servers" / "github_server.py",
 }
 
 
@@ -24,22 +25,16 @@ async def get_tools_from_server(server_name: str, server_path: Path) -> list[dic
                 schema = dict(tool.inputSchema)
                 schema.pop("title", None)
 
-                # Clean properties — remove title, force all types to string
                 clean_properties = {}
                 for prop_name, prop_val in schema.get("properties", {}).items():
                     clean_prop = dict(prop_val)
                     clean_prop.pop("title", None)
-
-                    # Force all types to string — Groq rejects integer/boolean
                     clean_prop["type"] = "string"
-
-                    # Convert non-string defaults to string
                     if "default" in clean_prop:
                         if clean_prop["default"] is None:
                             clean_prop["default"] = ""
                         else:
                             clean_prop["default"] = str(clean_prop["default"])
-
                     clean_properties[prop_name] = clean_prop
 
                 schema["properties"] = clean_properties
@@ -47,16 +42,16 @@ async def get_tools_from_server(server_name: str, server_path: Path) -> list[dic
                 result.append({
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name":        tool.name,
                         "description": tool.description,
-                        "parameters": schema,
+                        "parameters":  schema,
                     }
                 })
             return result
 
 
 async def get_all_tools() -> tuple[list[dict], dict[str, str]]:
-    all_tools = []
+    all_tools      = []
     tool_server_map = {}
 
     for server_name, server_path in MCP_SERVERS.items():

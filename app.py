@@ -2,6 +2,7 @@ import os
 import re
 import tempfile
 from datetime import date
+from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -10,6 +11,10 @@ from agent.auth import (
     delete_token, exchange_code_for_token,
     get_auth_url, get_user_email,
     load_token, save_token,
+    # GitHub
+    get_github_auth_url, exchange_github_code_for_token,
+    get_github_username, save_github_token,
+    load_github_token, delete_github_token,
 )
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -23,7 +28,7 @@ st.set_page_config(
 # ── Constants ─────────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = {
     "role": "system",
-    "content": "You are a smart, friendly and patient AI assistant with access to Google Drive and Gmail tools.",
+    "content": "You are a smart, friendly and patient AI assistant with access to Google Drive, Gmail and GitHub tools.",
 }
 LOADING_HTML = """
 <div style="
@@ -65,11 +70,15 @@ def clean_for_display(text):
 defaults = {
     "user_email": None, "user_creds": None, "saved_email": None,
     "auth_url": None,
+    # GitHub
+    "github_token": None, "github_username": None,
+    "github_auth_url": None, "github_connecting": False,
     "conversation_history": [SYSTEM_PROMPT],
     "messages": [], "uploaded_file_paths": [], "uploaded_file_names": [],
     "uploader_key": 0, "just_used_files": False,
     "working_key_index": 0, "working_key_date": str(date.today()),
     "do_clear": False, "do_logout": False,
+    "do_github_connect": False, "do_github_disconnect": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -95,13 +104,84 @@ if st.session_state.do_logout:
     st.session_state.do_logout = False
     if st.session_state.user_email:
         delete_token(st.session_state.user_email)
+        delete_github_token(st.session_state.user_email)
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
-# ── OAuth ─────────────────────────────────────────────────────────────────────
+if st.session_state.do_github_connect:
+    st.session_state.do_github_connect = False
+    auth_url, state = get_github_auth_url()
+    st.session_state.github_auth_url = auth_url
+    st.session_state.github_connecting = True
+    st.rerun()
+
+if st.session_state.do_github_disconnect:
+    st.session_state.do_github_disconnect = False
+    if st.session_state.user_email:
+        delete_github_token(st.session_state.user_email)
+    st.session_state.github_token = None
+    st.session_state.github_username = None
+    st.session_state.github_auth_url = None
+    st.session_state.github_connecting = False
+    st.rerun()
+
+# ── Restore sessions from disk FIRST — before any OAuth callback handling ────
+# This must run before OAuth callbacks so user_email is available for GitHub handler
+if st.session_state.user_email is None and st.session_state.saved_email:
+    _creds = load_token(st.session_state.saved_email)
+    if _creds:
+        st.session_state.user_email = st.session_state.saved_email
+        st.session_state.user_creds = _creds
+
+# ── OAuth Callbacks ───────────────────────────────────────────────────────────
 query_params = st.query_params
-if "code" in query_params and st.session_state.user_email is None:
+
+# ── GitHub OAuth callback — detected by 'github_' prefix in state param ──────
+# NOTE: We use state prefix instead of session flag because Streamlit loses
+# session state on full page redirects (GitHub OAuth does a real browser redirect).
+# IMPORTANT: Capture and clear query params FIRST before any processing
+# to prevent Google handler from seeing this code on any subsequent rerun.
+if "code" in query_params and query_params.get("state", "").startswith("github_"):
+    _gh_code  = query_params["code"]
+    _gh_state = query_params["state"]
+    st.query_params.clear()  # clear immediately before anything else
+    try:
+        with st.spinner("Connecting GitHub..."):
+            token_data = exchange_github_code_for_token(_gh_state, _gh_code)
+            username   = get_github_username(token_data)
+
+            # Restore user email — try session first, then temp file saved before redirect
+            if not st.session_state.user_email:
+                _session_file = Path(__file__).parent / "tokens" / "github_session.txt"
+                if _session_file.exists():
+                    _saved_email = _session_file.read_text().strip()
+                    if _saved_email:
+                        _creds = load_token(_saved_email)
+                        if _creds:
+                            st.session_state.user_email  = _saved_email
+                            st.session_state.saved_email = _saved_email
+                            st.session_state.user_creds  = _creds
+                try:
+                    _session_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+            if st.session_state.user_email:
+                save_github_token(st.session_state.user_email, token_data)
+
+            st.session_state.github_token     = token_data
+            st.session_state.github_username  = username
+            st.session_state.github_connecting = False
+            st.session_state.github_auth_url  = None
+            st.rerun()
+    except Exception as e:
+        st.error(f"GitHub login failed: {e}")
+        st.session_state.github_connecting = False
+        st.stop()
+
+# ── Google OAuth callback ─────────────────────────────────────────────────────
+elif "code" in query_params and st.session_state.user_email is None:
     try:
         with st.spinner("Logging you in..."):
             creds = exchange_code_for_token(
@@ -123,11 +203,20 @@ if "code" in query_params and st.session_state.user_email is None:
         st.session_state.auth_url = None
         st.stop()
 
+# ── Restore sessions from disk ────────────────────────────────────────────────
+# (already handled above before OAuth callbacks — this is a safety fallback)
 if st.session_state.user_email is None and st.session_state.saved_email:
-    creds = load_token(st.session_state.saved_email)
-    if creds:
+    _creds = load_token(st.session_state.saved_email)
+    if _creds:
         st.session_state.user_email = st.session_state.saved_email
-        st.session_state.user_creds = creds
+        st.session_state.user_creds = _creds
+
+# Restore GitHub token from disk if logged in but github_token not in session
+if st.session_state.user_email and st.session_state.github_token is None:
+    saved_gh = load_github_token(st.session_state.user_email)
+    if saved_gh:
+        st.session_state.github_token = saved_gh
+        st.session_state.github_username = get_github_username(saved_gh)
 
 # ── Global CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -270,7 +359,7 @@ if st.session_state.user_email is None:
             margin-bottom:10px;font-family:'Plus Jakarta Sans',sans-serif;">AI Assistant</div>
         <div style="font-size:13.5px;color:#5a5a78;line-height:1.75;margin-bottom:2rem;
             font-family:'Plus Jakarta Sans',sans-serif;">
-            Manage your Gmail &amp; Google Drive<br>intelligently — just by asking.
+            Manage your Gmail, Google Drive &amp; GitHub<br>intelligently — just by asking.
         </div>
         <a href="{st.session_state.auth_url}" target="_self" style="display:block;
             background:#5c5cf0;color:#fff;padding:13px 24px;border-radius:10px;
@@ -292,6 +381,23 @@ if st.session_state.user_email is None:
 # ══════════════════════════════════════════════════════════════════════════════
 email = st.session_state.user_email or ""
 initial = email[0].upper() if email else "?"
+github_username = st.session_state.github_username or ""
+github_connected = bool(st.session_state.github_token)
+
+# GitHub connect — direct redirect to GitHub OAuth
+# We save the user email to a temp file on disk before redirecting
+# so we can restore it after GitHub sends us back (session is wiped on redirect)
+if st.session_state.github_connecting and st.session_state.github_auth_url:
+    # Save current user email to disk so we can restore after redirect
+    if st.session_state.user_email:
+        _session_file = Path(__file__).parent / "tokens" / "github_session.txt"
+        _session_file.write_text(st.session_state.user_email)
+    auth_url = st.session_state.github_auth_url
+    st.markdown(
+        f'<meta http-equiv="refresh" content="0;url={auth_url}">',
+        unsafe_allow_html=True
+    )
+    st.stop()
 
 components.html(f"""
 <!DOCTYPE html>
@@ -416,7 +522,7 @@ components.html(f"""
                 border:1px solid #252538;
                 border-radius:12px;
                 padding:12px;
-                margin-bottom:18px;
+                margin-bottom:12px;
             ">
                 <div style="
                 width:36px;height:36px;border-radius:50%;
@@ -431,9 +537,29 @@ components.html(f"""
                     {email}
                 </div>
                 <div style="font-size:11px;color:#34c77a;">
-                    ● Connected
+                    ● Google Connected
                 </div>
                 </div>
+            </div>
+
+            <!-- GitHub Connection Card -->
+            <div style="
+                background:#1c1c2c;
+                border:1px solid #252538;
+                border-radius:12px;
+                padding:12px;
+                margin-bottom:18px;
+            ">
+                <div style="display:flex;align-items:center;gap:10px;margin-bottom:{'8px' if not github_connected else '0'};">
+                <div style="font-size:18px;">🐙</div>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:13px;color:#d0d0e8;">GitHub</div>
+                    <div style="font-size:11px;color:{'#34c77a' if github_connected else '#ff8080'};">
+                    {'● Connected as @' + github_username if github_connected else '○ Not connected'}
+                    </div>
+                </div>
+                </div>
+                {'<button class="st-drawer-btn" id="btn-github-disconnect" style="background:#2a1c1c;border:1px solid #3a2a2a;color:#ff8080;margin-bottom:0;">🔌 Disconnect GitHub</button>' if github_connected else '<button class="st-drawer-btn" id="btn-github-connect" style="background:#1a2a1a;border:1px solid #2a3a2a;color:#34c77a;margin-bottom:0;">🔗 Connect GitHub</button>'}
             </div>
 
             <!-- Section: Capabilities -->
@@ -448,7 +574,8 @@ components.html(f"""
                 🔍 Search emails<br>
                 📁 Manage Drive files<br>
                 📤 Upload files<br>
-                🔔 Mark read/unread
+                🔔 Mark read/unread<br>
+                🐙 GitHub repos &amp; issues
             </div>
 
             </div>
@@ -495,6 +622,24 @@ components.html(f"""
       var btns = p.querySelectorAll('button[kind="secondary"]');
       btns.forEach(b => {{ if (b.innerText.includes('Logout')) b.click(); }});
     }};
+
+    var ghConnect = p.getElementById('btn-github-connect');
+    if (ghConnect) {{
+      ghConnect.onclick = function() {{
+        closeDrawer();
+        var btns = p.querySelectorAll('button[kind="secondary"]');
+        btns.forEach(b => {{ if (b.innerText.includes('GitHub Connect')) b.click(); }});
+      }};
+    }}
+
+    var ghDisconnect = p.getElementById('btn-github-disconnect');
+    if (ghDisconnect) {{
+      ghDisconnect.onclick = function() {{
+        closeDrawer();
+        var btns = p.querySelectorAll('button[kind="secondary"]');
+        btns.forEach(b => {{ if (b.innerText.includes('GitHub Disconnect')) b.click(); }});
+      }};
+    }}
   }}
 
   function openDrawer() {{
@@ -550,7 +695,7 @@ components.html(f"""
 
 
 # Hidden Streamlit buttons wired to drawer actions
-col_h1, col_h2 = st.columns(2)
+col_h1, col_h2, col_h3, col_h4 = st.columns(4)
 with col_h1:
     if st.button("🗑️ Clear Chat", key="hidden_clear"):
         st.session_state.messages = []
@@ -565,8 +710,17 @@ with col_h1:
 with col_h2:
     if st.button("🚪 Logout", key="hidden_logout"):
         delete_token(st.session_state.user_email)
+        delete_github_token(st.session_state.user_email)
         for key in list(st.session_state.keys()):
             del st.session_state[key]
+        st.rerun()
+with col_h3:
+    if st.button("🔗 GitHub Connect", key="hidden_github_connect"):
+        st.session_state.do_github_connect = True
+        st.rerun()
+with col_h4:
+    if st.button("🔌 GitHub Disconnect", key="hidden_github_disconnect"):
+        st.session_state.do_github_disconnect = True
         st.rerun()
 
 # Hide these buttons visually
@@ -593,7 +747,7 @@ st.markdown("""
     </div>
     <div style="font-size:13px;color:#44445a;margin-top:4px;
         font-family:'Plus Jakarta Sans',sans-serif;">
-        Manage your Gmail and Google Drive — just ask!
+        Manage your Gmail, Google Drive and GitHub — just ask!
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -676,6 +830,7 @@ if user_input:
                 st.session_state.conversation_history,
                 st.session_state.working_key_index,
                 st.session_state.user_creds,
+                st.session_state.github_token,
             ):
                 if token is not None:
                     full_reply.append(token)
@@ -699,4 +854,4 @@ if user_input:
     if st.session_state.uploaded_file_paths:
         st.session_state.just_used_files = True
         st.session_state.uploader_key += 1
-        st.rerun() 
+        st.rerun()

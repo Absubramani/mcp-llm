@@ -30,3 +30,6 @@ python-pptx
 apscheduler             
 
 dateparser
+
+PyGithub
+requests-oauthlib
