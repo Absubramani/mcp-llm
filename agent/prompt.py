@@ -30,6 +30,7 @@ def _base_prompt(sections: list) -> str:
             "list_pull_requests, create_pull_request"
         )
 
+
     scope_examples_in = [
         "   - summarize my emails → ✅" if "gmail" in sections else "",
         "   - search for a file → ✅" if "drive" in sections else "",

@@ -26,6 +26,7 @@ from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent
 DB_PATH    = BASE_DIR / "scheduled_emails.db"

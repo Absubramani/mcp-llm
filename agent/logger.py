@@ -10,6 +10,7 @@ LOG_FILE = LOG_DIR / f"app_{datetime.now().strftime('%Y-%m-%d')}.log"
 logger = logging.getLogger("mcp_llm")
 logger.setLevel(logging.DEBUG)
 
+
 if not logger.handlers:
     file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)

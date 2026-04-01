@@ -1,5 +1,6 @@
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+
 if [ ! -f "$BASE_DIR/.env" ]; then
     echo "ERROR: .env file not found!"
     exit 1

@@ -75,6 +75,7 @@ def cleanup_creds_file():
     _current_creds_file = None
 
 
+
 def cleanup_github_creds_file():
     """Delete temp GitHub credentials file."""
     global _current_github_creds_file
