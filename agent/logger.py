@@ -47,14 +47,20 @@ def log_response(user_input: str, reply: str, duration_sec: float, tools_called:
 
 
 def log_error(error: str, context: str = ""):
-    lower = error.lower()
+    raw_error = error
+    lower     = error.lower()
     if any(x in lower for x in [
         "429", "rate_limit_exceeded", "rate_limit",
         "tokens per day", "tokens per minute",
         "requests per minute", "too many requests"
     ]):
-        m = re.search(r'try again in (\d+)m(\d+)', error)
-        msg = f"RATE LIMIT | retry in {m.group(1)}m {m.group(2)}s" if m else "RATE LIMIT"
+        m = re.search(r'try again in (?:(\d+)m)?\s*(\d+)s?', error)
+        if m:
+            mins = m.group(1) or "0"
+            secs = m.group(2)
+            msg = f"RATE LIMIT | retry in {mins}m {secs}s"
+        else:
+            msg = "RATE LIMIT"
     elif "413" in error or "too large" in lower:
         msg = "TOKEN LIMIT | request too large"
     elif "tool_use_failed" in lower or "failed_generation" in lower:
@@ -67,7 +73,7 @@ def log_error(error: str, context: str = ""):
         msg = "AUTH ERROR | invalid or expired API key"
     else:
         msg = error[:120]
-    logger.error(f"ERROR    | {msg} | context={context}")
+    logger.error(f"ERROR    | {msg} | context={context} | RAW={raw_error}")
 
 
 def log_rate_limit(wait_seconds: int, model: str):

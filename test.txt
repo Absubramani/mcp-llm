@@ -82,7 +82,6 @@ share updated.txt with abalasubramanir@gmail.com as reader
 get info on updated.txt
 
 
-
 === DRIVE ADVANCED TESTS ===
 
 list recent files
@@ -136,6 +135,9 @@ hccxxxg
 what is the weather today
 tell me a joke
 calculate 2 + 2
+who created github
+what is a pull request
+explain git branching
 
 
 === MULTI USER TESTS ===
@@ -154,3 +156,157 @@ read the first one
 summarize it
 list my files
 summarize AI_ML Milestones.docx
+
+
+=== GITHUB REPO TESTS ===
+
+list my github repos
+show my repositories
+list my repos
+
+=== GITHUB FILE BROWSING ===
+
+list files in Absubramani/mcp-llm
+list files in the agent folder of Absubramani/mcp-llm
+list files in the mcp_servers folder of Absubramani/mcp-llm
+list files in mcp-llm
+list files in test-ai-assistant
+
+read README.md from Absubramani/mcp-llm
+read requirements.txt from Absubramani/mcp-llm
+read app.py from Absubramani/mcp-llm
+(requirements.txt should show in a code block — # lines must NOT render as headers)
+
+
+=== GITHUB ISSUES ===
+
+list issues in Absubramani/mcp-llm
+list issues in mcp-llm
+list issues in test-ai-assistant
+list closed issues in Absubramani/mcp-llm
+list all issues in Absubramani/mcp-llm
+
+create an issue
+create an issue in Absubramani/mcp-llm
+create a bug issue in Absubramani/mcp-llm titled Login fails
+create issue in Absubramani/mcp-llm title: Test Issue body: This is a test issue labels: bug
+create an issue in test-ai-assistant titled Fix navbar bug body: The navbar breaks on mobile labels: bug
+
+read issue #1 in Absubramani/mcp-llm
+
+
+=== GITHUB PULL REQUESTS ===
+
+list pull requests in Absubramani/mcp-llm
+list closed pull requests in Absubramani/mcp-llm
+list all pull requests in Absubramani/mcp-llm
+
+create a pull request
+create a pull request in Absubramani/test-ai-assistant
+create a PR in Absubramani/test-ai-assistant title: Test PR head: feature-branch skip description
+
+--- After PR is created ---
+merge PR #1 in Absubramani/test-ai-assistant
+merge PR #1 in test-ai-assistant
+merge PR #1 in test-ai-assistant using squash
+merge PR #1 in test-ai-assistant using rebase
+
+
+=== GITHUB CREATE REPO ===
+
+create a repo
+create a public repo called test-project-1
+create a private repo called test-project-2 with readme skip description
+create a repo called test-project-3 public yes readme skip description
+
+
+=== GITHUB NOT CONNECTED TEST ===
+
+(Disconnect GitHub first, then test:)
+list my github repos
+create an issue
+create a repo
+create a project
+
+
+=== GITHUB FOLLOW UP TESTS ===
+
+list my github repos
+list issues in the second repo
+read the first issue
+create an issue in that repo
+
+list files in Absubramani/mcp-llm
+read the README file
+read the requirements file
+
+
+=== GITHUB SPELLING TESTS ===
+
+lst my github repos
+show my repositorys
+creat an issue in Absubramani/mcp-llm
+serach github repos for python
+
+
+=== GITHUB OUT OF SCOPE TESTS ===
+
+who created github
+what is a pull request
+explain git branching
+what is github
+
+
+=== GITHUB PROJECTS — CREATE PROJECT ===
+
+list my github projects
+list my github projects for Absubramani/test-ai-assistant
+
+create a project
+create a project called Sprint Board
+create a project called Sprint Board linked to Absubramani/test-ai-assistant
+(Should: ask for title and optional repo, then create and show URL with note about Board view)
+
+
+=== GITHUB PROJECTS — CREATE ISSUE ON BOARD ===
+
+create an issue in Absubramani/test-ai-assistant titled 'Implement user auth' and add it to my test project board
+create an issue titled 'Fix login bug' in test-ai-assistant add to test project
+create an issue in test-ai-assistant titled 'Setup CI/CD pipeline' add to sprint board
+
+
+=== GITHUB PROJECTS — UPDATE ISSUE (KEY FLOW — all in one prompt) ===
+
+(After creating issue on board:)
+assign myself for this, label is task, starting date is today and ending date is tomorrow after given all these move it to Ready column
+(Expected: uses update_project_issue_by_title in ONE call — NOT multiple tool calls)
+
+assign me to the 'Implement user auth' issue, set label to task, start date today, end date tomorrow, move to Ready
+assign Absubramani to 'Fix login bug', labels: bug enhancement, move to In progress
+
+
+=== GITHUB PROJECTS — MOVE & VIEW ===
+
+show me the issues on my test project board
+list issues on the test project board
+show issues in test project
+
+move the 'Implement user auth' issue to the 'In Progress' column
+move the 'Implement user auth' issue in the test project board to the 'Ready' column
+move it to Done
+
+update the end date for the 'Implement user auth' issue to next Friday
+update start date for that issue to today
+
+
+=== GITHUB PROJECTS — NATURAL LANGUAGE TESTS ===
+
+list issues in test project
+show issues on my board
+create issue testing issue and add to project
+move issue to in progress
+show my project board
+list files in test-ai-assistant
+read README from test-ai-assistant
+list issues in my main repo
+create a bug issue in my repo titled Login fails

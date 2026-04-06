@@ -22,7 +22,6 @@ def get_github_client() -> Github:
 
 
 def _get_access_token() -> str:
-    """Get raw access token string for GraphQL calls."""
     creds_file = os.environ.get("GITHUB_CREDS_FILE")
     if creds_file and Path(creds_file).exists():
         try:
@@ -50,70 +49,65 @@ def _build_github_client() -> Github:
     raise RuntimeError("No GitHub credentials found.")
 
 
+# ================= HELPERS =================
+
 def _normalize_repo(repo: str) -> str:
-    """Fix common hallucinations and normalize repo name."""
+    """Fix common spelling errors in repo names."""
     if not repo:
         return repo
     repo = repo.strip()
-    # Fix double-s typo that LLM sometimes produces
     repo = repo.replace("Abssubramani/", "Absubramani/")
     repo = repo.replace("abssubramani/", "Absubramani/")
     return repo
 
 
-def _resolve_short_repo(short_name: str) -> str:
-    """
-    Resolve a short repo name (no slash) to full 'owner/repo' by searching
-    the authenticated user's repos. Returns '' if not found.
-    """
-    if not short_name or "/" in short_name:
-        return short_name
-    try:
-        g = get_github_client()
-        user = g.get_user()
-        for r in user.get_repos(sort="updated"):
-            if r.name.lower() == short_name.lower():
-                return r.full_name
-    except Exception:
-        pass
-    return ""
-
-
 def _resolve_repo(repo: str) -> str:
     """
-    Master repo resolver:
-    1. Normalize spelling errors
-    2. If no slash → try to find full name from user repos
-    3. Return best guess
+    Resolve repo to full owner/repo format.
+    If short name given (no slash), searches user repos by name.
     """
     if not repo:
         return ""
     repo = _normalize_repo(repo)
     if "/" not in repo:
-        resolved = _resolve_short_repo(repo)
-        if resolved:
-            return resolved
+        try:
+            g    = get_github_client()
+            user = g.get_user()
+            for r in user.get_repos(sort="updated"):
+                if r.name.lower() == repo.lower():
+                    return r.full_name
+        except Exception:
+            pass
     return repo
 
 
 def _resolve_project_id(id_or_title: str) -> str:
     """
-    If input doesn't look like a node ID (PVT_... or PN_...), find it by title
-    from the user's projects list.
+    If input doesn't look like a node ID (PVT_... or PN_...), find it
+    by searching the user's projects list by title.
     """
     if not id_or_title:
         return id_or_title
-    if id_or_title.startswith("PVT_") or id_or_title.startswith("PN_"):
-        return id_or_title
+    s = id_or_title.strip()
+    if s.startswith("PVT_") or s.startswith("PN_"):
+        return s
     try:
         projects = list_projects()
         for p in projects:
             if isinstance(p, dict) and "title" in p:
-                if p["title"].lower() == id_or_title.lower():
-                    return p.get("id", id_or_title)
+                if p["title"].lower() == s.lower():
+                    return p.get("id", s)
     except Exception:
         pass
-    return id_or_title
+    return s
+
+
+def _safe_int(val, default: int = 10) -> int:
+    """Safely convert string or int to int."""
+    try:
+        return int(val) if val else default
+    except (ValueError, TypeError):
+        return default
 
 
 def _graphql(query: str, variables: dict = None) -> dict:
@@ -123,10 +117,10 @@ def _graphql(query: str, variables: dict = None) -> dict:
         "https://api.github.com/graphql",
         headers={
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
         },
         json={"query": query, "variables": variables or {}},
-        timeout=15,
+        timeout=20,
     )
     resp.raise_for_status()
     data = resp.json()
@@ -144,9 +138,10 @@ def list_repos(limit: str = "10") -> list:
     limit: number of repos to return (default 10).
     """
     try:
+        count = _safe_int(limit, 10)
         g     = get_github_client()
         user  = g.get_user()
-        repos = list(user.get_repos(sort="updated"))[:int(limit or 10)]
+        repos = list(user.get_repos(sort="updated"))[:count]
         if not repos:
             return [{"message": "No repositories found."}]
         return [
@@ -164,6 +159,8 @@ def list_repos(limit: str = "10") -> list:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
         return [{"status": "error", "message": str(e)}]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
 
 
 @mcp.tool()
@@ -176,18 +173,21 @@ def create_repo(
     """
     Create a new GitHub repository for the authenticated user.
     name: repository name (no spaces — use hyphens).
-    description: short description of the repo (optional).
-    private: 'true' to make it private, 'false' for public (default 'false').
-    auto_init: 'true' to initialize with a README (default 'true').
+    description: short description (optional).
+    private: 'true' for private, 'false' for public (default 'false').
+    auto_init: 'true' to initialize with README (default 'true').
     """
     try:
+        if not name or not name.strip():
+            return {"status": "error", "message": "Repository name is required."}
+        name = name.strip().replace(" ", "-")
         g    = get_github_client()
         user = g.get_user()
         repo = user.create_repo(
             name        = name,
             description = description or "",
-            private     = private.lower() == "true",
-            auto_init   = auto_init.lower() == "true",
+            private     = str(private).lower() == "true",
+            auto_init   = str(auto_init).lower() == "true",
         )
         return {
             "status":      "success",
@@ -195,12 +195,14 @@ def create_repo(
             "name":        repo.full_name,
             "url":         repo.html_url,
             "private":     repo.private,
-            "auto_init":   auto_init.lower() == "true",
+            "auto_init":   str(auto_init).lower() == "true",
             "description": repo.description or "",
         }
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
     except GithubException as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
@@ -212,8 +214,9 @@ def search_repos(query: str, limit: str = "5") -> list:
     limit: number of results (default 5).
     """
     try:
+        count = _safe_int(limit, 5)
         g     = get_github_client()
-        repos = list(g.search_repositories(query=query))[:int(limit or 5)]
+        repos = list(g.search_repositories(query=query))[:count]
         if not repos:
             return [{"message": f"No repositories found for '{query}'."}]
         return [
@@ -230,25 +233,26 @@ def search_repos(query: str, limit: str = "5") -> list:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
         return [{"status": "error", "message": str(e)}]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
 
 
 @mcp.tool()
 def list_repo_files(repo: str, path: str = "", branch: str = "") -> list:
     """
     List files and directories in a GitHub repository.
-    repo: full repo name like 'username/repo-name' or short name like 'my-repo'.
-    path: internal path in the repo (empty for root).
-    branch: branch name (optional).
+    repo: full repo name like 'username/repo-name' OR short name (auto-resolved).
+    path: internal path (empty for root). branch: optional.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
-            return [{"status": "error", "message": "Please provide the repository name (e.g. username/repo-name)."}]
+            return [{"status": "error", "message": "Please provide the repository name."}]
         g        = get_github_client()
         r        = g.get_repo(repo)
         kwargs   = {}
-        if branch:
-            kwargs["ref"] = branch
+        if branch and branch.strip():
+            kwargs["ref"] = branch.strip()
         contents = r.get_contents(path or "", **kwargs)
         if not isinstance(contents, list):
             contents = [contents]
@@ -268,39 +272,43 @@ def list_repo_files(repo: str, path: str = "", branch: str = "") -> list:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
         return [{"status": "error", "message": str(e)}]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
 
 
 @mcp.tool()
 def read_file_from_repo(repo: str, file_path: str, branch: str = "") -> dict:
     """
     Read the content of a file from a GitHub repository.
-    repo: full repo name like 'username/repo-name' or short name like 'my-repo'.
-    file_path: full path to the file in the repo (e.g. 'README.md', 'agent/orchestrator.py').
-    branch: branch name (optional, defaults to default branch).
+    repo: full repo name like 'username/repo-name' OR short name.
+    file_path: path to the file e.g. 'README.md', 'agent/orchestrator.py'.
+    branch: optional, defaults to default branch.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
-            return {"status": "error", "message": "Please provide the repository name (e.g. username/repo-name)."}
-        if not file_path:
-            return {"status": "error", "message": "Please provide the file path to read."}
+            return {"status": "error", "message": "Please provide the repository name."}
+        if not file_path or not file_path.strip():
+            return {"status": "error", "message": "Please provide the file path."}
         g      = get_github_client()
         r      = g.get_repo(repo)
         kwargs = {}
-        if branch:
-            kwargs["ref"] = branch
-        content = r.get_contents(file_path, **kwargs)
+        if branch and branch.strip():
+            kwargs["ref"] = branch.strip()
+        content = r.get_contents(file_path.strip(), **kwargs)
         text    = content.decoded_content.decode("utf-8", errors="ignore")
         return {
-            "file":    file_path,
+            "file":    file_path.strip(),
             "repo":    repo,
             "branch":  branch or r.default_branch,
-            "content": text[:3000],
+            "content": text[:5000],
             "size":    content.size,
         }
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
     except GithubException as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
@@ -308,7 +316,7 @@ def read_file_from_repo(repo: str, file_path: str, branch: str = "") -> dict:
 def list_branches(repo: str) -> list:
     """
     List all branches in a repository.
-    repo: full repo name like 'username/repo-name' or short name like 'my-repo'.
+    repo: full repo name like 'username/repo-name' OR short name.
     """
     try:
         repo = _resolve_repo(repo)
@@ -320,50 +328,52 @@ def list_branches(repo: str) -> list:
         if not branches:
             return [{"message": f"No branches found in {repo}."}]
         return [
-            {
-                "name":    b.name,
-                "default": b.name == r.default_branch,
-            }
+            {"name": b.name, "default": b.name == r.default_branch}
             for b in branches
         ]
     except RuntimeError as e:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
         return [{"status": "error", "message": str(e)}]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
 
 
 @mcp.tool()
-def list_issues(repo: str, state: str = "open", limit: str = "") -> list:
+def list_issues(repo: str, state: str = "open", limit: str = "20") -> list:
     """
     List issues in a repository.
-    repo: full repo name like 'username/repo-name' or short name like 'my-repo'.
-    state: open, closed, or all.
-    limit: number of results (max 100).
+    repo: full repo name OR short name. state: open/closed/all. limit: default 20.
     """
     try:
-        repo = _resolve_repo(repo)
+        repo  = _resolve_repo(repo)
         if not repo:
-            return [{"status": "error", "message": "Please provide the repository name (e.g. username/repo-name)."}]
+            return [{"status": "error", "message": "Please provide the repository name."}]
+        state = (state or "open").strip().lower()
+        if state not in ("open", "closed", "all"):
+            state = "open"
         g      = get_github_client()
         r      = g.get_repo(repo)
-        issues = r.get_issues(state=state or "open")
-        res    = []
-        for i in list(issues)[:int(limit or 20)]:
-            res.append({
+        issues = list(r.get_issues(state=state))[:_safe_int(limit, 20)]
+        if not issues:
+            return [{"message": f"No {state} issues found in {repo}."}]
+        return [
+            {
                 "number":     i.number,
                 "title":      i.title,
                 "state":      i.state,
                 "author":     i.user.login if i.user else "",
                 "created_at": i.created_at.isoformat(),
                 "url":        i.html_url,
-            })
-        if not res:
-            return [{"message": f"No {state or 'open'} issues found in {repo}."}]
-        return res
+            }
+            for i in issues
+        ]
     except RuntimeError as e:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
         return [{"status": "error", "message": f"GitHub Error: {str(e)}"}]
+    except Exception as e:
+        return [{"status": "error", "message": str(e)}]
 
 
 @mcp.tool()
@@ -378,43 +388,35 @@ def create_issue(
 ) -> dict:
     """
     Create a new issue in a repository.
-    repo: full repo name like 'username/repo-name' or short name.
-    title: issue title (required).
-    body: issue description (optional).
-    labels: comma separated label names (optional).
-    assignee: GitHub username to assign the issue to (optional).
-    start_date: start date in YYYY-MM-DD format (optional).
-    end_date: end date / due date in YYYY-MM-DD format (optional).
+    repo: full repo name OR short name. title: required.
+    body: optional. labels: comma-separated. assignee: GitHub username.
+    start_date/end_date: YYYY-MM-DD format.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
-            return {"status": "error", "message": "Please provide the repository name (e.g. username/repo-name)."}
-        if not title:
+            return {"status": "error", "message": "Please provide the repository name."}
+        if not title or not title.strip():
             return {"status": "error", "message": "Please provide an issue title."}
         g          = get_github_client()
         r          = g.get_repo(repo)
-        label_list = [l.strip() for l in labels.split(",") if l.strip()] if labels else []
+        label_list = [l.strip() for l in (labels or "").split(",") if l.strip()]
         assignees  = [assignee.strip()] if assignee and assignee.strip() else []
-
-        full_body = body or ""
+        full_body  = (body or "").rstrip()
         if start_date or end_date:
-            full_body = full_body.rstrip()
             if full_body:
                 full_body += "\n\n"
             if start_date:
                 full_body += f"**Start Date:** {start_date}\n"
             if end_date:
                 full_body += f"**End Date:** {end_date}\n"
-
         create_kwargs = {
-            "title":  title,
+            "title":  title.strip(),
             "body":   full_body,
             "labels": label_list,
         }
         if assignees:
             create_kwargs["assignees"] = assignees
-
         issue = r.create_issue(**create_kwargs)
         return {
             "status":     "success",
@@ -430,22 +432,26 @@ def create_issue(
         return {"status": "error", "message": str(e)}
     except GithubException as e:
         return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
 def read_issue(repo: str, issue_number: str) -> dict:
     """
     Read full details of a specific issue.
-    repo: full repo name like 'username/repo-name'.
-    issue_number: the issue number.
+    repo: full repo name OR short name. issue_number: the number.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
             return {"status": "error", "message": "Please provide the repository name."}
+        num = _safe_int(issue_number, 0)
+        if num == 0:
+            return {"status": "error", "message": "Please provide a valid issue number."}
         g     = get_github_client()
         r     = g.get_repo(repo)
-        issue = r.get_issue(int(issue_number))
+        issue = r.get_issue(num)
         return {
             "number":  issue.number,
             "title":   issue.title,
@@ -459,41 +465,47 @@ def read_issue(repo: str, issue_number: str) -> dict:
         return {"status": "error", "message": str(e)}
     except GithubException as e:
         return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
 def list_pull_requests(repo: str, state: str = "open", limit: str = "5") -> list:
     """
     List pull requests in a repository.
-    repo: full repo name like 'username/repo-name'.
-    state: 'open', 'closed', or 'all' (default 'open').
-    limit: number of PRs to return (default 5).
+    repo: full repo name OR short name. state: open/closed/all. limit: default 5.
     """
     try:
-        repo = _resolve_repo(repo)
+        repo  = _resolve_repo(repo)
         if not repo:
             return [{"status": "error", "message": "Please provide the repository name."}]
+        state = (state or "open").strip().lower()
+        if state not in ("open", "closed", "all"):
+            state = "open"
         g   = get_github_client()
         r   = g.get_repo(repo)
-        prs = list(r.get_pulls(state=state or "open"))[:int(limit or 5)]
+        prs = list(r.get_pulls(state=state))[:_safe_int(limit, 5)]
         if not prs:
-            return [{"message": f"No {state or 'open'} pull requests found in {repo}.", "empty": True}]
+            return [{"message": f"No {state} pull requests found in {repo}.", "empty": True}]
         return [
             {
-                "number":  pr.number,
-                "title":   pr.title,
-                "state":   pr.state,
-                "author":  pr.user.login if pr.user else "",
-                "head":    pr.head.ref,
-                "base":    pr.base.ref,
-                "created": pr.created_at.isoformat() if pr.created_at else "",
-                "url":     pr.html_url,
+                "number":    pr.number,
+                "title":     pr.title,
+                "state":     pr.state,
+                "author":    pr.user.login if pr.user else "",
+                "head":      pr.head.ref,
+                "base":      pr.base.ref,
+                "created":   pr.created_at.isoformat() if pr.created_at else "",
+                "url":       pr.html_url,
+                "mergeable": pr.mergeable,
             }
             for pr in prs
         ]
     except RuntimeError as e:
         return [{"status": "error", "message": str(e)}]
     except GithubException as e:
+        return [{"status": "error", "message": str(e)}]
+    except Exception as e:
         return [{"status": "error", "message": str(e)}]
 
 
@@ -507,35 +519,33 @@ def create_pull_request(
 ) -> dict:
     """
     Create a new pull request in a repository.
-    repo: full repo name like 'username/repo-name'.
-    title: pull request title.
-    head: the branch containing your changes (must be an existing branch).
-    base: the branch you want to merge into (default 'main').
-    body: pull request description (optional).
+    repo: full repo name OR short name. title: required.
+    head: source branch with changes (must exist). base: target branch (default main).
+    body: optional description.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
             return {"status": "error", "message": "Please provide the repository name."}
-        if not title:
+        if not title or not title.strip():
             return {"status": "error", "message": "Please provide a PR title."}
-        if not head:
-            return {"status": "error", "message": "Please provide the head branch (source branch with your changes)."}
-        g  = get_github_client()
-        r  = g.get_repo(repo)
+        if not head or not head.strip():
+            return {"status": "error", "message": "Please provide the head branch."}
+        g = get_github_client()
+        r = g.get_repo(repo)
         try:
-            r.get_branch(head)
+            r.get_branch(head.strip())
         except GithubException:
             branches = [b.name for b in list(r.get_branches())[:10]]
             return {
                 "status":  "error",
-                "message": f"Branch '{head}' does not exist in {repo}. Available branches: {', '.join(branches)}",
+                "message": f"Branch '{head}' does not exist in {repo}. Available: {', '.join(branches)}",
             }
         pr = r.create_pull(
-            title = title,
-            head  = head,
-            base  = base or "main",
-            body  = body or "",
+            title = title.strip(),
+            head  = head.strip(),
+            base  = (base or "main").strip(),
+            body  = (body or ""),
         )
         return {
             "status":  "success",
@@ -543,12 +553,75 @@ def create_pull_request(
             "number":  pr.number,
             "title":   pr.title,
             "url":     pr.html_url,
-            "head":    head,
-            "base":    base or "main",
+            "head":    head.strip(),
+            "base":    (base or "main").strip(),
+            "repo":    repo,
         }
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
     except GithubException as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def merge_pull_request(
+    repo: str,
+    pull_number: str,
+    merge_method: str = "merge",
+    commit_title: str = "",
+    commit_message: str = "",
+) -> dict:
+    """
+    Merge an open pull request.
+    repo: full repo name OR short name. pull_number: PR number.
+    merge_method: 'merge' (default), 'squash' (combine commits), 'rebase' (linear history).
+    commit_title: optional custom commit title.
+    commit_message: optional commit message body.
+    """
+    try:
+        repo = _resolve_repo(repo)
+        if not repo:
+            return {"status": "error", "message": "Please provide the repository name."}
+        num = _safe_int(pull_number, 0)
+        if num == 0:
+            return {"status": "error", "message": "Please provide a valid PR number."}
+        method = (merge_method or "merge").strip().lower()
+        if method not in ("merge", "squash", "rebase"):
+            method = "merge"
+        g  = get_github_client()
+        r  = g.get_repo(repo)
+        pr = r.get_pull(num)
+        if pr.state != "open":
+            return {"status": "error", "message": f"PR #{num} is already {pr.state} — cannot merge."}
+        if pr.mergeable is False:
+            return {"status": "error",
+                    "message": f"PR #{num} has merge conflicts. Please resolve them on GitHub first."}
+        kwargs = {"merge_method": method}
+        if commit_title and commit_title.strip():
+            kwargs["commit_title"] = commit_title.strip()
+        if commit_message and commit_message.strip():
+            kwargs["commit_message"] = commit_message.strip()
+        result = pr.merge(**kwargs)
+        if result.merged:
+            return {
+                "status":   "success",
+                "message":  f"PR #{num} merged successfully via {method}.",
+                "merged":   True,
+                "sha":      result.sha,
+                "method":   method,
+                "title":    pr.title,
+                "head":     pr.head.ref,
+                "base":     pr.base.ref,
+                "issue_num": num,
+            }
+        return {"status": "error", "message": result.message or "Merge failed."}
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except GithubException as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
@@ -556,26 +629,27 @@ def create_pull_request(
 def create_branch(repo: str, branch_name: str, base_branch: str = "main") -> dict:
     """
     Create a new branch in a repository.
-    repo: full repo name like 'username/repo-name'.
-    branch_name: name of the new branch to create.
-    base_branch: the existing branch to branch off from (default 'main').
+    repo: full repo name OR short name. branch_name: new branch.
+    base_branch: branch to fork from (default main).
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
             return {"status": "error", "message": "Please provide the repository name."}
+        if not branch_name or not branch_name.strip():
+            return {"status": "error", "message": "Please provide a branch name."}
         g = get_github_client()
         r = g.get_repo(repo)
         try:
-            source = r.get_branch(base_branch or "main")
+            source = r.get_branch((base_branch or "main").strip())
         except GithubException:
             return {"status": "error", "message": f"Base branch '{base_branch}' does not exist in {repo}."}
         try:
-            r.create_git_ref(ref=f"refs/heads/{branch_name}", sha=source.commit.sha)
+            r.create_git_ref(ref=f"refs/heads/{branch_name.strip()}", sha=source.commit.sha)
             return {
                 "status":  "success",
                 "message": f"Branch '{branch_name}' created successfully from '{base_branch}'.",
-                "branch":  branch_name,
+                "branch":  branch_name.strip(),
                 "repo":    repo,
             }
         except GithubException as e:
@@ -584,7 +658,7 @@ def create_branch(repo: str, branch_name: str, base_branch: str = "main") -> dic
             return {"status": "error", "message": str(e)}
     except RuntimeError as e:
         return {"status": "error", "message": str(e)}
-    except GithubException as e:
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
@@ -593,19 +667,18 @@ def create_branch(repo: str, branch_name: str, base_branch: str = "main") -> dic
 # ══════════════════════════════════════════════════════════════════════════════
 
 @mcp.tool()
-def list_projects(repo: str = "", limit: str = "5") -> list:
+def list_projects(repo: str = "", limit: str = "10") -> list:
     """
     List GitHub Projects (v2) for the authenticated user or a specific repo.
-    repo: optional 'owner/repo-name' to list repo-linked projects.
-    limit: number of projects to return (default 10).
+    repo: optional 'owner/repo-name'. limit: default 10.
     If repo is empty, lists all projects owned by the authenticated user.
     """
     try:
-        count = int(limit or 10)
+        count    = _safe_int(limit, 10)
         projects = []
 
-        if repo:
-            repo = _resolve_repo(repo)
+        if repo and repo.strip():
+            repo  = _resolve_repo(repo.strip())
             owner, repo_name = repo.split("/", 1)
             query = """
             query($owner: String!, $repo: String!, $limit: Int!) {
@@ -620,7 +693,7 @@ def list_projects(repo: str = "", limit: str = "5") -> list:
               }
             }
             """
-            data = _graphql(query, {"owner": owner, "repo": repo_name, "limit": count})
+            data     = _graphql(query, {"owner": owner, "repo": repo_name, "limit": count})
             projects = data.get("repository", {}).get("projectsV2", {}).get("nodes", [])
         else:
             query = """
@@ -671,22 +744,18 @@ def list_projects(repo: str = "", limit: str = "5") -> list:
             """
             data   = _graphql(query, {"limit": count})
             viewer = data.get("viewer", {})
-
             v2     = viewer.get("projectsV2", {}).get("nodes", []) or []
             recent = viewer.get("recentProjects", {}).get("nodes", []) or []
-
             issue_projects = []
             for issue in viewer.get("issues", {}).get("nodes", []):
                 for item in issue.get("projectItems", {}).get("nodes", []):
                     if item.get("project"):
                         issue_projects.append(item["project"])
-
             pr_projects = []
             for pr in viewer.get("pullRequests", {}).get("nodes", []):
                 for item in pr.get("projectItems", {}).get("nodes", []):
                     if item.get("project"):
                         pr_projects.append(item["project"])
-
             all_source = v2 + recent + issue_projects + pr_projects
             merged     = {p["id"]: p for p in all_source if p and "id" in p}
             projects   = list(merged.values())
@@ -698,10 +767,9 @@ def list_projects(repo: str = "", limit: str = "5") -> list:
         for p in projects:
             if p.get("closed"):
                 continue
-            owner_login  = ""
-            if p.get("owner"):
-                owner_login = p["owner"].get("login", "")
-            linked_repos = [r["nameWithOwner"] for r in p.get("repositories", {}).get("nodes", []) if r.get("nameWithOwner")]
+            owner_login  = p.get("owner", {}).get("login", "") if p.get("owner") else ""
+            linked_repos = [r["nameWithOwner"] for r in
+                            p.get("repositories", {}).get("nodes", []) if r.get("nameWithOwner")]
             results.append({
                 "id":     p["id"],
                 "number": p["number"],
@@ -720,11 +788,93 @@ def list_projects(repo: str = "", limit: str = "5") -> list:
 
 
 @mcp.tool()
+def create_project(title: str, repo: str = "") -> dict:
+    """
+    Create a new GitHub Project (v2) for the authenticated user.
+    title: project name (required).
+    repo: optional 'owner/repo-name' to link the project to a repository.
+    Note: Projects v2 starts as a Table view. User can add a Board view from the project URL.
+    """
+    try:
+        if not title or not title.strip():
+            return {"status": "error", "message": "Please provide a project title."}
+
+        # Get viewer node ID
+        viewer_query = "query { viewer { id login } }"
+        viewer_data  = _graphql(viewer_query)
+        owner_id     = viewer_data.get("viewer", {}).get("id", "")
+        if not owner_id:
+            return {"status": "error", "message": "Could not get your GitHub user ID."}
+
+        # Create the project
+        create_mutation = """
+        mutation($ownerId: ID!, $title: String!) {
+          createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+            projectV2 { id number title url }
+          }
+        }
+        """
+        create_data = _graphql(create_mutation, {"ownerId": owner_id, "title": title.strip()})
+        project     = create_data.get("createProjectV2", {}).get("projectV2", {})
+        if not project.get("id"):
+            return {"status": "error", "message": "Failed to create project."}
+
+        project_id  = project["id"]
+        project_url = project["url"]
+
+        # Optionally link to repo
+        repo_linked = ""
+        if repo and repo.strip():
+            repo = _resolve_repo(repo.strip())
+            try:
+                parts      = repo.split("/", 1)
+                repo_owner = parts[0]
+                repo_name  = parts[1] if len(parts) > 1 else repo
+                link_query = """
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) { id }
+                }
+                """
+                repo_data = _graphql(link_query, {"owner": repo_owner, "repo": repo_name})
+                repo_id   = repo_data.get("repository", {}).get("id", "")
+                if repo_id:
+                    link_mutation = """
+                    mutation($projectId: ID!, $repoId: ID!) {
+                      linkProjectV2ToRepository(
+                        input: { projectId: $projectId, repositoryId: $repoId }
+                      ) { repository { nameWithOwner } }
+                    }
+                    """
+                    _graphql(link_mutation, {"projectId": project_id, "repoId": repo_id})
+                    repo_linked = repo
+            except Exception:
+                pass  # Linking is optional — project still created
+
+        return {
+            "status":     "success",
+            "message":    f"Project '{title.strip()}' created successfully.",
+            "project_id": project_id,
+            "number":     project.get("number"),
+            "title":      title.strip(),
+            "url":        project_url,
+            "repo_linked": repo_linked,
+            "note": (
+                "Project created! Open the URL to set up your board. "
+                "GitHub Projects v2 starts as a Table view — click '+ New view' "
+                "and choose 'Board' to get Kanban columns (Backlog, Ready, In Progress, etc.)."
+            ),
+        }
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
 def get_project_columns(project_id: str) -> list:
     """
     Get all status columns/options of a GitHub Project v2 board.
-    project_id: the node ID of the project (from list_projects), or project title.
-    Returns list of columns with their option IDs — needed for move_issue_to_column.
+    project_id: PVT_... node ID or project title.
     """
     try:
         project_id = _resolve_project_id(project_id)
@@ -746,7 +896,6 @@ def get_project_columns(project_id: str) -> list:
         """
         data   = _graphql(query, {"projectId": project_id})
         fields = data.get("node", {}).get("fields", {}).get("nodes", [])
-
         columns = []
         for field in fields:
             if field.get("name", "").lower() == "status" and "options" in field:
@@ -757,7 +906,6 @@ def get_project_columns(project_id: str) -> list:
                         "status_field_id":  field["id"],
                     })
                 break
-
         if not columns:
             return [{"message": "No status columns found in this project."}]
         return columns
@@ -771,23 +919,20 @@ def get_project_columns(project_id: str) -> list:
 def add_issue_to_project(project_id: str, issue_url: str) -> dict:
     """
     Add an existing GitHub issue to a Project v2 board.
-    project_id: the node ID of the project (from list_projects) or project title.
-    issue_url: the full HTML URL of the issue e.g. https://github.com/owner/repo/issues/12
-    Returns the project item ID needed for move_issue_to_column and update_project_issue_fields.
+    project_id: PVT_... node ID or project title.
+    issue_url: full HTML URL of the issue e.g. https://github.com/owner/repo/issues/12
+    Returns the project item ID needed for move/update operations.
     """
     try:
-        if not project_id:
+        if not project_id or not project_id.strip():
             return {"status": "error", "message": "project_id is required."}
-        if not issue_url:
+        if not issue_url or not issue_url.strip():
             return {"status": "error", "message": "issue_url is required."}
-
-        project_id = _resolve_project_id(project_id)
-
-        parts     = issue_url.rstrip("/").split("/")
-        number    = int(parts[-1])
-        repo_name = parts[-3]
-        owner     = parts[-4]
-
+        project_id = _resolve_project_id(project_id.strip())
+        parts      = issue_url.rstrip("/").split("/")
+        number     = int(parts[-1])
+        repo_name  = parts[-3]
+        owner      = parts[-4]
         id_query = """
         query($owner: String!, $repo: String!, $number: Int!) {
           repository(owner: $owner, name: $repo) {
@@ -799,7 +944,6 @@ def add_issue_to_project(project_id: str, issue_url: str) -> dict:
         issue_id = id_data.get("repository", {}).get("issue", {}).get("id", "")
         if not issue_id:
             return {"status": "error", "message": "Could not find issue node ID."}
-
         add_query = """
         mutation($projectId: ID!, $contentId: ID!) {
           addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
@@ -811,7 +955,6 @@ def add_issue_to_project(project_id: str, issue_url: str) -> dict:
         item_id  = add_data.get("addProjectV2ItemById", {}).get("item", {}).get("id", "")
         if not item_id:
             return {"status": "error", "message": "Failed to add issue to project."}
-
         return {
             "status":  "success",
             "message": "Issue added to project successfully.",
@@ -831,50 +974,46 @@ def move_issue_to_column(
 ) -> dict:
     """
     Move a project issue card to a different column (status).
-    project_id: the node ID of the project (from list_projects) or project title.
-    item_id: the project item ID (from add_issue_to_project or list_project_issues).
-    column_name: name of the target column e.g. 'Backlog', 'Ready', 'In progress', 'In review', 'Done'.
+    project_id: PVT_... node ID or project title.
+    item_id: project item ID from list_project_issues or add_issue_to_project.
+    column_name: e.g. 'Backlog', 'Ready', 'In progress', 'In review', 'Done'.
     """
     try:
-        project_id = _resolve_project_id(project_id)
+        if not project_id or not project_id.strip():
+            return {"status": "error", "message": "project_id is required."}
+        if not item_id or not item_id.strip():
+            return {"status": "error", "message": "item_id is required. Call list_project_issues first to get it."}
+        project_id = _resolve_project_id(project_id.strip())
         columns    = get_project_columns(project_id)
         if not columns or (len(columns) == 1 and "message" in columns[0]):
             return {"status": "error", "message": "Could not retrieve project columns."}
-
-        target = None
-        for col in columns:
-            if col.get("column_name", "").lower() == column_name.lower():
-                target = col
-                break
-
+        target = next(
+            (c for c in columns if c.get("column_name", "").lower() == (column_name or "").lower()),
+            None
+        )
         if not target:
             available = [c["column_name"] for c in columns]
             return {
                 "status":  "error",
                 "message": f"Column '{column_name}' not found. Available: {', '.join(available)}",
             }
-
         mutation = """
         mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
           updateProjectV2ItemFieldValue(input: {
-            projectId: $projectId,
-            itemId: $itemId,
-            fieldId: $fieldId,
+            projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
             value: { singleSelectOptionId: $optionId }
-          }) {
-            projectV2Item { id }
-          }
+          }) { projectV2Item { id } }
         }
         """
         _graphql(mutation, {
             "projectId": project_id,
-            "itemId":    item_id,
+            "itemId":    item_id.strip(),
             "fieldId":   target["status_field_id"],
             "optionId":  target["column_option_id"],
         })
         return {
             "status":  "success",
-            "message": f"Issue moved to **{column_name}** successfully.",
+            "message": f"Issue moved to '{column_name}' successfully.",
             "column":  column_name,
         }
     except RuntimeError as e:
@@ -892,90 +1031,63 @@ def update_project_issue_fields(
 ) -> dict:
     """
     Update custom date fields (start date, end date) on a project board item.
-    project_id: the node ID of the project (from list_projects) or project title.
-    item_id: the project item ID (from add_issue_to_project or list_project_issues).
-    start_date: start date in YYYY-MM-DD format (optional).
-    end_date: end/due date in YYYY-MM-DD format (optional).
+    project_id: PVT_... node ID or project title.
+    item_id: project item ID from list_project_issues.
+    start_date / end_date: YYYY-MM-DD format.
     """
     try:
-        project_id = _resolve_project_id(project_id)
+        if not project_id or not project_id.strip():
+            return {"status": "error", "message": "project_id is required."}
+        if not item_id or not item_id.strip():
+            return {"status": "error", "message": "item_id is required. Call list_project_issues first."}
+        project_id = _resolve_project_id(project_id.strip())
         query = """
         query($projectId: ID!) {
           node(id: $projectId) {
             ... on ProjectV2 {
               fields(first: 20) {
-                nodes {
-                  ... on ProjectV2Field {
-                    id name dataType
-                  }
-                }
+                nodes { ... on ProjectV2Field { id name dataType } }
               }
             }
           }
         }
         """
-        data   = _graphql(query, {"projectId": project_id})
-        fields = data.get("node", {}).get("fields", {}).get("nodes", [])
-
+        data      = _graphql(query, {"projectId": project_id})
+        fields    = data.get("node", {}).get("fields", {}).get("nodes", [])
         field_map = {
             f.get("name", "").lower(): f.get("id")
-            for f in fields
-            if f.get("dataType") == "DATE" and f.get("id")
+            for f in fields if f.get("dataType") == "DATE" and f.get("id")
         }
-
         mutation = """
         mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $date: Date!) {
           updateProjectV2ItemFieldValue(input: {
-            projectId: $projectId,
-            itemId: $itemId,
-            fieldId: $fieldId,
+            projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
             value: { date: $date }
-          }) {
-            projectV2Item { id }
-          }
+          }) { projectV2Item { id } }
         }
         """
         updated = []
-
-        if start_date:
-            start_field_id = (
-                field_map.get("start date") or
-                field_map.get("start") or
-                field_map.get("startdate")
-            )
-            if start_field_id:
-                _graphql(mutation, {
-                    "projectId": project_id,
-                    "itemId":    item_id,
-                    "fieldId":   start_field_id,
-                    "date":      start_date,
-                })
+        if start_date and start_date.strip():
+            fid = (field_map.get("start date") or field_map.get("start") or
+                   field_map.get("startdate"))
+            if fid:
+                _graphql(mutation, {"projectId": project_id, "itemId": item_id.strip(),
+                                    "fieldId": fid, "date": start_date.strip()})
                 updated.append(f"Start Date: {start_date}")
             else:
-                updated.append("⚠️ Start Date field not found in project — skipped")
-
-        if end_date:
-            end_field_id = (
-                field_map.get("end date") or
-                field_map.get("end") or
-                field_map.get("due date") or
-                field_map.get("enddate") or
-                field_map.get("duedate")
-            )
-            if end_field_id:
-                _graphql(mutation, {
-                    "projectId": project_id,
-                    "itemId":    item_id,
-                    "fieldId":   end_field_id,
-                    "date":      end_date,
-                })
+                updated.append("⚠️ Start Date field not found — skipped")
+        if end_date and end_date.strip():
+            fid = (field_map.get("end date") or field_map.get("end") or
+                   field_map.get("due date") or field_map.get("enddate") or
+                   field_map.get("duedate"))
+            if fid:
+                _graphql(mutation, {"projectId": project_id, "itemId": item_id.strip(),
+                                    "fieldId": fid, "date": end_date.strip()})
                 updated.append(f"End Date: {end_date}")
             else:
-                updated.append("⚠️ End Date field not found in project — skipped")
-
+                updated.append("⚠️ End Date field not found — skipped")
         if not updated:
             return {"status": "error", "message": "No date fields found to update."}
-
         return {
             "status":  "success",
             "message": "Project fields updated: " + ", ".join(updated),
@@ -988,26 +1100,25 @@ def update_project_issue_fields(
 
 
 @mcp.tool()
-def list_project_issues(project_id: str, limit: str = "10") -> list:
+def list_project_issues(project_id: str, limit: str = "20") -> list:
     """
-    List all issues/items in a GitHub project board.
-    project_id: the Project Title (e.g. 'test project') or node ID (PVT_...).
-    If project_id is empty, tries to find your only/default project board.
+    List all issues/items in a GitHub project board with their status and item_id.
+    project_id: project title (e.g. 'test project') or PVT_... node ID. limit: default 20.
+    Each result includes item_id needed for move_issue_to_column and update_project_issue_fields.
     """
     try:
-        if not project_id:
+        if not project_id or not project_id.strip():
             projects = list_projects()
             if not projects or (isinstance(projects, list) and "message" in projects[0]):
-                return [{"status": "error", "message": "You don't have any GitHub Projects yet."}]
+                return [{"status": "error", "message": "You don't have any GitHub Projects."}]
             if len(projects) == 1:
                 project_id = projects[0]["id"]
             else:
                 titles = [p["title"] for p in projects[:5]]
-                return [{"status": "error", "message": f"Which project board should I check? You have {len(projects)} projects: {', '.join(titles)}"}]
-
-        project_id = _resolve_project_id(project_id)
-        count      = int(limit or 20)
-
+                return [{"status": "error",
+                         "message": f"Which project board? You have: {', '.join(titles)}"}]
+        project_id = _resolve_project_id(project_id.strip())
+        count      = _safe_int(limit, 20)
         query = """
         query($projectId: ID!, $limit: Int!) {
           node(id: $projectId) {
@@ -1042,31 +1153,22 @@ def list_project_issues(project_id: str, limit: str = "10") -> list:
         """
         data  = _graphql(query, {"projectId": project_id, "limit": count})
         items = data.get("node", {}).get("items", {}).get("nodes", [])
-
         if not items:
             return [{"message": "No items found in this project."}]
-
         result = []
         for item in items:
             content = item.get("content", {})
             if not content or not content.get("title"):
                 continue
-
-            status     = ""
-            start_date = ""
-            end_date   = ""
+            status = start_date = end_date = ""
             for fv in item.get("fieldValues", {}).get("nodes", []):
-                field_name = fv.get("field", {}).get("name", "").lower()
-                if field_name == "status" and fv.get("name"):
+                fname = fv.get("field", {}).get("name", "").lower()
+                if fname == "status" and fv.get("name"):
                     status = fv["name"]
-                elif "start" in field_name and fv.get("date"):
+                elif "start" in fname and fv.get("date"):
                     start_date = fv["date"]
-                elif ("end" in field_name or "due" in field_name) and fv.get("date"):
+                elif ("end" in fname or "due" in fname) and fv.get("date"):
                     end_date = fv["date"]
-
-            assignees = [a["login"] for a in content.get("assignees", {}).get("nodes", [])]
-            labels    = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
-
             result.append({
                 "item_id":    item["id"],
                 "number":     content.get("number", ""),
@@ -1074,18 +1176,126 @@ def list_project_issues(project_id: str, limit: str = "10") -> list:
                 "status":     status or "No status",
                 "state":      content.get("state", ""),
                 "url":        content.get("url", ""),
-                "assignees":  assignees,
-                "labels":     labels,
+                "assignees":  [a["login"] for a in content.get("assignees", {}).get("nodes", [])],
+                "labels":     [l["name"] for l in content.get("labels", {}).get("nodes", [])],
                 "start_date": start_date,
                 "end_date":   end_date,
             })
-
         return result if result else [{"message": "No issue items found in this project."}]
-
     except RuntimeError as e:
         return [{"status": "error", "message": str(e)}]
     except Exception as e:
         return [{"status": "error", "message": str(e)}]
+
+
+@mcp.tool()
+def update_project_issue_by_title(
+    project_id: str,
+    issue_title: str,
+    assignee: str = "",
+    labels: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    move_to_column: str = "",
+) -> dict:
+    """
+    Update a project board issue by its TITLE — no need to know item_id.
+    Automatically looks up item_id from the board, then applies all updates.
+    project_id: PVT_... node ID or project title (e.g. 'test project').
+    issue_title: part of or exact issue title to match.
+    assignee: GitHub username (optional).
+    labels: comma-separated label names (optional).
+    start_date: YYYY-MM-DD (optional).
+    end_date: YYYY-MM-DD (optional).
+    move_to_column: target column e.g. 'Ready', 'In progress', 'Done' (optional).
+    """
+    try:
+        if not project_id or not project_id.strip():
+            return {"status": "error", "message": "project_id is required."}
+        if not issue_title or not issue_title.strip():
+            return {"status": "error", "message": "issue_title is required."}
+
+        project_id = _resolve_project_id(project_id.strip())
+
+        # Step 1: Find the issue on the board by title
+        board_items = list_project_issues(project_id)
+        if not board_items or (len(board_items) == 1 and "message" in board_items[0]):
+            return {"status": "error", "message": "No issues found on this project board."}
+
+        search  = issue_title.strip().lower()
+        matched = [
+            item for item in board_items
+            if isinstance(item, dict) and item.get("title")
+            and search in item["title"].lower()
+        ]
+        if not matched:
+            titles = [item.get("title", "") for item in board_items if isinstance(item, dict) and item.get("title")]
+            return {
+                "status":  "error",
+                "message": (f"No issue matching '{issue_title}' found on the board. "
+                            f"Available: {', '.join(titles[:5])}"),
+            }
+
+        item      = matched[0]
+        item_id   = item["item_id"]
+        issue_num = item.get("number", "")
+        issue_url = item.get("url", "")
+        results   = []
+
+        # Step 2: Update issue assignee and labels via GitHub REST API
+        if issue_url and (assignee or labels):
+            try:
+                url_parts    = issue_url.rstrip("/").split("/")
+                issue_number = int(url_parts[-1])
+                repo_name    = url_parts[-4] + "/" + url_parts[-3]
+                g     = get_github_client()
+                r     = g.get_repo(repo_name)
+                issue = r.get_issue(issue_number)
+                update_kwargs = {}
+                if assignee and assignee.strip():
+                    update_kwargs["assignees"] = [assignee.strip()]
+                    results.append(f"Assigned to @{assignee.strip()}")
+                if labels and labels.strip():
+                    label_list = [l.strip() for l in labels.split(",") if l.strip()]
+                    update_kwargs["labels"] = label_list
+                    results.append(f"Labels: {', '.join(label_list)}")
+                if update_kwargs:
+                    issue.edit(**update_kwargs)
+            except Exception as e:
+                results.append(f"⚠️ Could not update issue fields: {str(e)[:80]}")
+
+        # Step 3: Update date fields on the project board
+        if start_date or end_date:
+            date_result = update_project_issue_fields(
+                project_id, item_id,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if date_result.get("status") == "success":
+                results.extend(date_result.get("updated", []))
+            else:
+                results.append(f"⚠️ Date update: {date_result.get('message', '')}")
+
+        # Step 4: Move to column if requested
+        if move_to_column and move_to_column.strip():
+            move_result = move_issue_to_column(project_id, item_id, move_to_column.strip())
+            if move_result.get("status") == "success":
+                results.append(f"Moved to '{move_to_column}'")
+            else:
+                results.append(f"⚠️ Move failed: {move_result.get('message', '')}")
+
+        summary = ", ".join(results) if results else "No changes made."
+        return {
+            "status":    "success",
+            "message":   f"Issue #{issue_num} updated: {summary}",
+            "item_id":   item_id,
+            "issue_num": issue_num,
+            "updates":   results,
+        }
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @mcp.tool()
@@ -1102,26 +1312,20 @@ def create_project_issue(
     """
     Full flow: Create an issue in a repo AND add it to a project board in the Backlog column.
     Also sets assignee, labels, start date and end date automatically.
-    repo: full repo name like 'owner/repo-name'.
-    project_id: the node ID of the project (from list_projects) or project title.
-    title: issue title (required).
-    body: issue description (optional).
-    labels: comma separated label names (optional).
-    assignee: GitHub username to assign to (optional).
-    start_date: start date YYYY-MM-DD (optional).
-    end_date: end/due date YYYY-MM-DD (optional).
+    repo: full repo name OR short name. project_id: PVT_... or project title.
+    title: required. body/labels/assignee/start_date/end_date: optional.
     """
     try:
         repo = _resolve_repo(repo)
         if not repo:
             return {"status": "error", "message": "Please provide the repository name."}
-        if not project_id:
-            return {"status": "error", "message": "Please provide the project board name or ID. (Call list_projects first if unsure)"}
-        if not title:
+        if not project_id or not project_id.strip():
+            return {"status": "error", "message": "Please provide the project board name or ID."}
+        if not title or not title.strip():
             return {"status": "error", "message": "Please provide an issue title."}
+        project_id = _resolve_project_id(project_id.strip())
 
-        project_id = _resolve_project_id(project_id)
-
+        # Step 1: Create the issue
         issue_result = create_issue(
             repo=repo, title=title, body=body,
             labels=labels, assignee=assignee,
@@ -1133,6 +1337,7 @@ def create_project_issue(
         issue_url    = issue_result["url"]
         issue_number = issue_result["number"]
 
+        # Step 2: Add to project board
         add_result = add_issue_to_project(project_id, issue_url)
         if add_result.get("status") != "success":
             return {
@@ -1140,7 +1345,7 @@ def create_project_issue(
                 "message": (
                     f"✅ Issue #{issue_number} created successfully!\n\n"
                     f"⚠️ Could not add to project board: {add_result.get('message')}\n\n"
-                    "Please do NOT retry creation. You can manually add the issue to the board."
+                    "Please do NOT retry. You can manually add the issue to the board."
                 ),
                 "number":  issue_number,
                 "url":     issue_url,
@@ -1148,8 +1353,11 @@ def create_project_issue(
             }
 
         item_id = add_result["item_id"]
+
+        # Step 3: Move to Backlog
         move_issue_to_column(project_id, item_id, "Backlog")
 
+        # Step 4: Set date fields if provided
         date_result = None
         if start_date or end_date:
             date_result = update_project_issue_fields(
