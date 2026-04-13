@@ -193,6 +193,8 @@ create issue in Absubramani/mcp-llm title: Test Issue body: This is a test issue
 create an issue in test-ai-assistant titled Fix navbar bug body: The navbar breaks on mobile labels: bug
 
 read issue #1 in Absubramani/mcp-llm
+add a comment to issue #1 in Absubramani/mcp-llm saying "This looks good to me"
+add comment to issue #2 in test-ai-assistant saying "I will work on this today"
 
 
 === GITHUB PULL REQUESTS ===

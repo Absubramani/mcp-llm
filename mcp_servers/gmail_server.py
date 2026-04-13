@@ -195,9 +195,8 @@ def _attach_files(msg: MIMEMultipart, file_paths: list) -> list:
 
 
 # ================= TOOLS =================
-
 @mcp.tool()
-def list_emails(max_results: str = "10", query: str = "", num: str = "", page_token: str = "") -> dict:
+def list_emails(max_results: str = "10", query: str = "", page_token: str = "") -> dict:
     """
     List emails from Gmail inbox with pagination support.
     max_results: number of emails to return (default 10).
@@ -207,7 +206,7 @@ def list_emails(max_results: str = "10", query: str = "", num: str = "", page_to
     """
     gmail_service = get_service()
     try:
-        count = int(num) if num else int(max_results) if max_results else 10
+        count = int(max_results) if max_results else 10
         q = "in:inbox " + query if query else "in:inbox"
 
         kwargs = dict(userId="me", maxResults=count, q=q)

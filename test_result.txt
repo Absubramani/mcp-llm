@@ -1,0 +1,15 @@
+list my last 3 email
+
+Here are your last 3 emails:
+
+📧 Indeed no-reply@indeed.com: Your next step: new job openings - Thu, 09 Apr 2026 09:03:15 +0000
+📧 LinkedIn Job Alerts jobalerts-noreply@linkedin.com: Citi is hiring for Python Data Analyst - Thu, 9 Apr 2026 07:37:02 +0000 (UTC)
+📧 LinkedIn Job Alerts jobalerts-noreply@linkedin.com: Citi is hiring for Python Data Analyst - Thu, 9 Apr 2026 05:37:02 +0000 (UTC)
+
+
+read my first email
+
+❌ I couldn't find your first email. It's possible that it has been deleted or is no longer accessible. If you'd like to try again, please let me know!
+
+
+

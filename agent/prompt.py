@@ -193,8 +193,8 @@ _GMAIL_PROMPT = (
 
     "LIST EMAILS — call list_emails, respond EXACTLY:\n"
     "   Here are your latest emails:\n\n"
-    "   1. **From:** [sender] | **Subject:** [subject] | **Date:** [date]\n"
-    "   2. **From:** [sender] | **Subject:** [subject] | **Date:** [date]\n"
+    "   1. **From:** [sender] | **Subject:** [subject] | **Date:** [date] <!-- id:[id] -->\n"
+    "   2. **From:** [sender] | **Subject:** [subject] | **Date:** [date] <!-- id:[id] -->\n"
     "   ...\n\n"
     "   Reply with a number to read, summarize, reply, or delete any email.\n\n"
 
@@ -353,8 +353,8 @@ _DRIVE_PROMPT = (
 
     "LIST FILES — call list_files. Format EXACTLY:\n"
     "   Here are the files in **[folder]**:\n\n"
-    "   1. 📁 **[folder name]** | Modified: [date]\n"
-    "   2. 📄 **[file name]** | Modified: [date]\n\n"
+    "   1. 📁 **[folder name]** | Modified: [date] <!-- id:[folder_id] -->\n"
+    "   2. 📄 **[file name]** | Modified: [date] <!-- id:[file_id] -->\n\n"
     "   If user says 'show more' — use next_page_token.\n\n"
 
     "LIST RECENT FILES — call list_recent_files. Same format. Use next_page_token if needed.\n\n"
@@ -424,13 +424,13 @@ _GITHUB_PROMPT = (
 
     "LIST REPOS — call list_repos. Format EXACTLY:\n"
     "   🐙 Your GitHub repositories:\n\n"
-    "   1. **[owner/repo]** | ⭐ [stars] | [language] | [description]\n"
+    "   1. **[owner/repo]** | ⭐ [stars] | [language] | [description] <!-- name:[owner/repo] -->\n"
     "   ...\n\n"
     "   Reply with a repo name to list issues, PRs, or read a file.\n\n"
 
     "LIST ISSUES — call list_issues with repo. Format EXACTLY:\n"
     "   🐛 Open issues in **[repo]**:\n\n"
-    "   1. **#[number]** [title] | by [author] | [date]\n"
+    "   1. **#[number]** [title] | by [author] | [date] <!-- number:[number] -->\n"
     "   ...\n\n"
     "   Reply with a number to read the full issue.\n\n"
 
@@ -438,6 +438,10 @@ _GITHUB_PROMPT = (
     "   🐛 **Issue #[number]: [title]**\n\n"
     "   **Author:** [author] | **State:** [state] | **Created:** [date]\n\n"
     "   [issue body]\n\n"
+
+    "ADD COMMENT — use history to resolve repo and issue_number, then call add_issue_comment. Format EXACTLY:\n"
+    "   ✅ Comment added successfully to **Issue #[number]**! 💬\n\n"
+    "   🔗 **URL:** [url]\n\n"
 
     "CREATE ISSUE — CRITICAL FLOW:\n"
     "   NEVER create without user EXPLICITLY providing both repo AND title.\n"

@@ -1,6 +1,6 @@
 # 🤖 AI Assistant — Gmail, Google Drive & GitHub Agent
 
-A conversational AI assistant that manages your Gmail, Google Drive, and GitHub using natural language. Built with LangChain, MCP (Model Context Protocol), Groq (LLaMA 3.3 70B), and Streamlit.
+A conversational AI assistant that manages your Gmail, Google Drive, and GitHub using natural language. Built with a **dual-LLM architecture**, LangChain, MCP (Model Context Protocol), Groq, and Streamlit.
 
 ---
 
@@ -28,42 +28,44 @@ A conversational AI assistant that manages your Gmail, Google Drive, and GitHub 
 - Upload, download, move, copy, rename files
 - Delete and restore files/folders
 - Share files with specific users
-- Get file info
-- List recently modified files
+- Get file info and list recently modified files
 
 ### 🐙 GitHub
 - List, search, and browse repositories
-- Read files from any repo (always shown in syntax-highlighted code blocks)
+- Read files from any repo (syntax-highlighted code blocks)
 - List, read, and create issues
 - List branches and create new branches
-- List, create, and **merge** pull requests (merge / squash / rebase)
+- List, create, and merge pull requests (merge / squash / rebase)
 - Search GitHub repositories
 - Create new repositories
 
 ### 📋 GitHub Projects (v2)
 - List all project boards
-- **Create new GitHub Projects** (linked to a repository)
-- View all issues on a project board with status, dates, and assignees
-- Create issues directly on a project board (added to Backlog automatically)
-- Update issues by title — set assignee, labels, start/end dates, move to column — all in one prompt
+- Create new GitHub Projects (linked to a repository)
+- View all issues with status, dates, and assignees
+- Create issues directly on a project board (added to Backlog)
+- Update issues by title — assignee, labels, dates, column — all in one prompt
 - Move issues between columns (Backlog → Ready → In Progress → In Review → Done)
-- Update custom date fields (start date, end date)
+- Update custom date fields
 
-### 🤖 AI Behavior
-- Conversational — asks for missing info before acting
-- Follow-up context — remembers ids and filenames from chat history
-- Spelling correction — understands informal and misspelled input
-- Structured responses — bold, emojis, clean formatting
-- Multi-user — each user has isolated Google and GitHub credentials
-- Streaming responses — tokens render live like ChatGPT
-- Smart fallback — when rate-limited, returns results already obtained from completed tool calls
+### 🤖 Dual-LLM Architecture (Production)
+- **Router LLM** (`llama-3.1-8b-instant`, dedicated `GROQ_ROUTER_KEY`):
+  - Scope check — rejects off-topic requests instantly, before any tool loads
+  - Intent detection — separates greetings from actions
+  - Input normalization — fixes spelling, expands abbreviations
+  - Section routing — decides which tools (gmail/drive/github) to load
+- **Agent LLM** (`llama-3.3-70b-versatile`, `GROQ_API_KEY_2` + `GROQ_API_KEY_3`):
+  - Executes tools and streams the response
+  - Fallback chain: Key 2 → Key 3 → Mistral → Ollama
+- **Key isolation** — Router and Agent use completely separate Groq keys, so they never exhaust each other's quota
+- Streaming responses — tokens render live
+- Smart fallback — when rate-limited after tool calls, returns results already obtained
 
-### 📄 Supported File Types for Reading/Summarizing
+### 📄 Supported File Types
 - Google Docs, Sheets, Slides
 - PDF, DOCX, XLSX, PPTX
 - TXT, MD, CSV, HTML, JSON, XML
 - Python, JS, TS, YAML, SH, SQL, and more
-- GitHub repo files (always displayed in syntax-highlighted code blocks)
 
 ---
 
@@ -79,9 +81,10 @@ mcp-llm/
 ├── .env                    # Environment variables (not committed)
 │
 ├── agent/
-│   ├── orchestrator.py     # LLM selection, agent execution, streaming, smart fallback
-│   ├── prompt.py           # System prompt — all LLM behavior rules
-│   ├── tool_executor.py    # MCP tool execution + argument sanitization + type coercion
+│   ├── router.py           # Router LLM — scope, intent, normalization, section routing
+│   ├── orchestrator.py     # Dual-LLM wiring, agent execution, streaming, smart fallback
+│   ├── prompt.py           # Agent LLM system prompt — all tool behavior rules
+│   ├── tool_executor.py    # MCP tool execution + argument sanitization
 │   ├── tool_schema.py      # Fetch tool schemas from MCP servers
 │   ├── logger.py           # Structured file logging
 │   └── auth.py             # Google + GitHub OAuth flow + token management
@@ -131,30 +134,36 @@ pip install -r requirements.txt --break-system-packages
 ```env
 LLM_PROVIDER=groq
 
-GROQ_API_KEY_1=your_first_groq_key
-GROQ_API_KEY_2=your_second_groq_key
-GROQ_API_KEY_3=your_third_groq_key
+# KEY_1 → Router LLM only (fast classification, never touches agent quota)
+GROQ_ROUTER_KEY=your_groq_key_1
 
-# Optional — Mistral fallback (recommended)
+# KEY_2 → Agent LLM primary
+GROQ_API_KEY_2=your_groq_key_2
+
+# KEY_3 → Agent LLM fallback
+GROQ_API_KEY_3=your_groq_key_3
+
+# Optional — Mistral fallback for agent (recommended)
 MISTRAL_API_KEY=your_mistral_key
+
+OLLAMA_BASE_URL=http://localhost:11434
 
 # GitHub OAuth
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 ```
 
+> **Why 3 separate keys?** The Router LLM (`GROQ_ROUTER_KEY`) and Agent LLM (`GROQ_API_KEY_2/3`) use completely separate Groq keys so they can never exhaust each other's daily quota (100K tokens/day per key on free tier).
+
 Get free Groq API keys at [console.groq.com](https://console.groq.com)  
 Get Mistral API keys at [console.mistral.ai](https://console.mistral.ai)
 
-> Set `LLM_PROVIDER=ollama` to use local Ollama instead of Groq.
-
 ### 6. Run
 ```bash
-# Recommended — starts both app and scheduler together
 bash run.sh
 ```
 
-Or manually in two terminals:
+Or manually:
 ```bash
 # Terminal 1 — scheduler (required for scheduled emails)
 python scheduler.py
@@ -174,60 +183,70 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 | Variable | Required | Description |
 |---|---|---|
 | `LLM_PROVIDER` | Yes | `groq` or `ollama` |
-| `GROQ_API_KEY_1` | If Groq | First Groq API key |
-| `GROQ_API_KEY_2` | Optional | Second key — fallback |
-| `GROQ_API_KEY_3` | Optional | Third key — fallback |
-| `MISTRAL_API_KEY` | Optional | Mistral fallback key (recommended) |
+| `GROQ_ROUTER_KEY` | Yes (if Groq) | Dedicated key for Router LLM only |
+| `GROQ_API_KEY_2` | Yes (if Groq) | Agent LLM primary key |
+| `GROQ_API_KEY_3` | Optional | Agent LLM fallback key |
+| `MISTRAL_API_KEY` | Optional | Agent LLM Mistral fallback |
+| `OLLAMA_BASE_URL` | Optional | Ollama base URL (default: `http://localhost:11434`) |
 | `GITHUB_CLIENT_ID` | For GitHub | GitHub OAuth app Client ID |
 | `GITHUB_CLIENT_SECRET` | For GitHub | GitHub OAuth app Client Secret |
-| `GROQ_MODEL` | Optional | Override model (default: `llama-3.3-70b-versatile`) |
+| `GROQ_MODEL` | Optional | Override agent model (default: `llama-3.3-70b-versatile`) |
 
 ---
 
-## 🤖 LLM Architecture
+## 🤖 Dual-LLM Architecture
 
 ```
 User Input
     ↓
-LangChain Agent (create_openai_tools_agent)
+┌─────────────────────────────────────────────┐
+│  Router LLM  (llama-3.1-8b-instant)         │
+│  Key: GROQ_ROUTER_KEY (dedicated)           │
+│  Speed: ~0.3s                               │
+│                                             │
+│  ├─ in_scope = false  → return ❌ instantly  │
+│  ├─ is_conversational → skip tools, greet   │
+│  ├─ cleaned_input     → normalized input    │
+│  └─ sections          → [gmail/drive/github]│
+└─────────────────────────────────────────────┘
     ↓
-Groq Key 1 → Key 2 → Key 3 → Mistral → Ollama  (fallback chain)
-    ↓
-MCP Tool Call  (one at a time)
+┌─────────────────────────────────────────────┐
+│  Agent LLM  (llama-3.3-70b-versatile)       │
+│  Keys: GROQ_API_KEY_2 → KEY_3 → Mistral    │
+│        → Ollama                             │
+│                                             │
+│  Executes MCP tool calls one at a time      │
+│  Streams response token by token            │
+└─────────────────────────────────────────────┘
     ↓
 drive_server.py / gmail_server.py / github_server.py
     ↓
 Google API / GitHub REST + GraphQL API
-    ↓
-Structured Response (streamed token-by-token)
 ```
 
-**Fallback logic:**
-- Rate limited or quota exceeded → try next Groq key immediately
+**Why key isolation matters:**
+- Groq free tier = 100K tokens/day per key
+- Router uses ~200 tokens per call (tiny, 8b model)
+- Agent uses ~2,000–5,000 tokens per call (large, 70b model)
+- Without isolation: both compete on the same key → quota exhausted faster
+- With isolation: Router always has a fresh key, Agent has its own two keys
+- If Router key fails → graceful fallback to all-sections (never crashes)
+
+**Agent fallback chain:**
+- `GROQ_API_KEY_2` rate limited → try `GROQ_API_KEY_3`
 - All Groq keys exhausted → fall to Mistral
 - Mistral unavailable → fall to Ollama
-- If tools already ran before rate limit hit → return smart formatted reply from tool results (no re-execution)
-- Keys reset daily (100K tokens/day per key on free tier)
+- If tools already ran before rate limit → return smart reply from results (no re-execution)
 
-> **Important:** Use `llama-3.3-70b-versatile` only (the default). Do NOT use `llama-3.1-8b-instant` — its 6,000 TPM limit is too small for this app's prompt size.
+> **Important:** Use `llama-3.3-70b-versatile` only (the default) for the Agent. Do NOT use `llama-3.1-8b-instant` for the Agent — its 6,000 TPM limit is too small for this app's prompt size.
 
 ---
 
 ## 🐙 GitHub Integration
 
-Connect GitHub by clicking **Connect GitHub** in the side menu (☰). This triggers an OAuth flow — no personal access tokens needed.
+Connect GitHub by clicking **Connect GitHub** in the side menu (☰). No personal access tokens needed.
 
-**Short repo names work automatically** — just say `mcp-llm` and the tool resolves it to `Absubramani/mcp-llm` without asking.
-
-**Example prompts:**
-```
-list my github repos
-read requirements.txt from mcp-llm
-list issues in test-ai-assistant
-create a bug issue in test-ai-assistant titled "Login breaks on mobile" labels: bug
-create a pull request in test-ai-assistant
-merge PR #5 in test-ai-assistant using squash
-```
+**Short repo names work automatically** — just say `mcp-llm` and the tool resolves it to `Absubramani/mcp-llm`.
 
 ---
 
@@ -235,28 +254,13 @@ merge PR #5 in test-ai-assistant using squash
 
 Full project board management via GitHub's GraphQL API.
 
-**Create a project:**
-```
-create a project called Sprint Board linked to Absubramani/test-ai-assistant
-```
-
-**Manage issues on the board:**
-```
-show issues on my test project board
-create an issue 'Implement OAuth' in test-ai-assistant add to test project
-assign me to that issue, label: feature, start today, end Friday, move to Ready
-move 'Implement OAuth' to Done
-```
-
 The `update_project_issue_by_title` tool handles assignee + labels + dates + column move in a **single call** — no need to know internal `item_id`.
 
-> **Note:** New GitHub Projects v2 start as a Table view. To get Kanban-style columns (Backlog, Ready, In Progress, etc.), open the project URL and click **+ New view → Board**.
+> **Note:** New GitHub Projects v2 start as a Table view. To get Kanban-style columns, open the project URL and click **+ New view → Board**.
 
 ---
 
 ## 📅 Scheduled Emails
-
-The scheduler runs as a companion process. It checks the job queue every 30 seconds and sends emails at the exact scheduled time.
 
 ```
 gmail_server.py  →  writes job to scheduled_emails.db
@@ -265,72 +269,45 @@ scheduler.py     →  reads jobs every 30s → sends at exact time
 
 Jobs survive app restarts — if the scheduler was offline when a job was due, it sends immediately on next startup.
 
-**Example usage:**
-```
-schedule email to someone@gmail.com at tomorrow 9am
-schedule email to someone@gmail.com at Friday 3pm
-show my scheduled emails
-cancel my scheduled email
-```
-
 ---
 
 ## 📝 Logging
 
-Logs are written daily to `logs/app_YYYY-MM-DD.log`:
+Logs written daily to `logs/app_YYYY-MM-DD.log`:
 ```
-2026-04-02 12:02:52 | INFO     | LLM      | Using Groq Key 1
-2026-04-02 12:02:58 | INFO     | TOOL     | [OK] create_project_issue | args={...} | 4.79s
-2026-04-02 12:03:41 | INFO     | RESPONSE | 50.57s | tools=[create_project_issue] | '✅ Issue #14...'
-2026-04-02 12:04:08 | WARNING  | LLM      | Groq Key 1 failed — Rate limited → falling back
-2026-04-02 12:04:08 | INFO     | LLM      | Using Groq Key 2
+2026-04-02 12:02:50 | INFO     | ROUTER   | sections=['github'] cleaned='list my repositories'
+2026-04-02 12:02:52 | INFO     | LLM      | Using Groq Key 2
+2026-04-02 12:02:58 | INFO     | TOOL     | [OK] list_repos | args={} | 2.1s
+2026-04-02 12:03:01 | INFO     | RESPONSE | 11.2s | tools=[list_repos] | '🐙 Your GitHub...'
+2026-04-02 12:04:08 | WARNING  | LLM      | Groq Key 2 failed — Rate limited → falling back
+2026-04-02 12:04:08 | INFO     | LLM      | Using Groq Key 3
 ```
-
----
-
-## 🧪 Testing
-
-Use `test.txt` — covers all features in order:
-
-```
-Gmail → Schedule Email → Spelling → Conversational → Follow-up →
-Drive → File Types → Upload → Error Handling → Conversation →
-GitHub Repos → File Reading → Issues → Pull Requests → PR Merge →
-Create Repo → GitHub Projects → Create Project → Board Management →
-Update Issues → Natural Language Tests
-```
-
-Run all tests manually via the chat UI.
 
 ---
 
 ## 🔒 Security
 
-- Google OAuth tokens stored locally per user — never shared between users
-- GitHub OAuth tokens stored locally per user — never shared between users
+- Google and GitHub OAuth tokens stored locally per user — never shared between users
 - Credentials passed via temp files to MCP servers — deleted after each request
-- No API keys exposed in UI
-- Path traversal attempts handled by Drive server
-- Off-topic requests blocked by prompt scope rules
 - CSRF protection on GitHub OAuth via state parameter verification
+- Off-topic requests rejected by Router LLM before any tool loads — zero wasted compute
+- No API keys exposed in UI
 
 ---
 
 ## 🚀 Ollama Setup (Optional)
 
-For local LLM without Groq:
 ```bash
-# Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
-
-# Pull model
 ollama pull llama3.1:8b
+```
 
-# Set in .env
+Set in `.env`:
+```env
 LLM_PROVIDER=ollama
 ```
 
-> Ollama is a last-resort fallback. It handles simple requests but may struggle with complex multi-step GitHub operations due to smaller context window.
+> Ollama is a last-resort fallback. Complex multi-step GitHub operations may not work reliably with the 8B model.
 
 ---
 
@@ -340,12 +317,12 @@ LLM_PROVIDER=ollama
 |---|---|
 | `streamlit` | Web UI + OAuth redirect handling |
 | `langchain` | Agent framework |
-| `langchain-groq` | Groq LLM integration |
-| `langchain-openai` | Mistral LLM integration |
-| `langchain-ollama` | Ollama LLM integration |
+| `langchain-groq` | Groq LLM (Router + Agent) |
+| `langchain-openai` | Mistral fallback |
+| `langchain-ollama` | Ollama fallback |
 | `mcp` | Model Context Protocol server/client |
 | `google-api-python-client` | Gmail + Drive APIs |
-| `PyGithub` | GitHub REST API (repos, issues, PRs, branches) |
+| `PyGithub` | GitHub REST API |
 | `requests` | GitHub GraphQL API (Projects v2) |
 | `apscheduler` | Scheduled email delivery |
 | `dateparser` | Natural language time parsing |
@@ -403,9 +380,8 @@ update end date for 'Implement OAuth' to next Monday
 
 ## 🛠️ Known Limitations
 
-- **Groq free tier:** 100,000 tokens/day per API key. Heavy usage exhausts the daily quota. Use 3 keys for maximum coverage throughout the day.
-- **GitHub Projects v2:** New projects start as a Table view. Board view (Kanban columns) must be added manually from the project URL by clicking **+ New view → Board**.
-- **Ollama fallback:** Complex multi-step GitHub Project operations may not work reliably with the 8B model due to context limitations.
-- **File content from GitHub:** Always displayed inside syntax-highlighted code blocks to prevent Markdown rendering issues (e.g. `#` comment lines rendering as giant headers).
-
----
+- **Groq free tier:** 100,000 tokens/day per API key. Use 3 separate keys (Router + 2 Agent) for maximum daily coverage.
+- **Router LLM** uses `llama-3.1-8b-instant` which has a 6,000 TPM limit — but since it only classifies (not executes tools), this is rarely hit in practice.
+- **GitHub Projects v2:** New projects start as a Table view. Board view must be added manually from the project URL.
+- **Ollama fallback:** Complex multi-step GitHub Project operations may not work reliably with the 8B model.
+- **File content from GitHub:** Always displayed inside syntax-highlighted code blocks to prevent Markdown rendering issues.

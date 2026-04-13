@@ -468,6 +468,44 @@ def read_issue(repo: str, issue_number: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@mcp.tool()
+def add_issue_comment(repo: str, issue_number: str, body: str) -> dict:
+    """
+    Add a comment to an issue or pull request.
+    repo: full repo name OR short name.
+    issue_number: the issue or pull request number.
+    body: the comment text (markdown supported).
+    """
+    try:
+        repo = _resolve_repo(repo)
+        if not repo:
+            return {"status": "error", "message": "Please provide the repository name."}
+        num = _safe_int(issue_number, 0)
+        if num == 0:
+            return {"status": "error", "message": "Please provide a valid issue number."}
+        if not body or not body.strip():
+            return {"status": "error", "message": "Please provide the comment body."}
+        
+        g     = get_github_client()
+        r     = g.get_repo(repo)
+        issue = r.get_issue(num)
+        comment = issue.create_comment(body.strip())
+        
+        return {
+            "status":  "success",
+            "message": f"Comment added to issue #{num} successfully.",
+            "url":     comment.html_url,
+            "id":      comment.id,
+            "repo":    repo,
+            "number":  num,
+        }
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+    except GithubException as e:
+        return {"status": "error", "message": str(e)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 @mcp.tool()
 def list_pull_requests(repo: str, state: str = "open", limit: str = "5") -> list:
