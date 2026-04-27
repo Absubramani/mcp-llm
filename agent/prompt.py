@@ -23,7 +23,7 @@ def _base_prompt(sections: list) -> str:
     if "github" in sections:
         tools_line.append(
             "GITHUB: list_repos, create_repo, search_repos, list_repo_files,\n"
-            "read_file_from_repo, list_branches, list_issues, create_issue, read_issue,\n"
+            "read_file_from_repo, list_branches, list_issues, create_issue, read_issue, add_issue_comment,\n"
             "list_pull_requests, create_pull_request, merge_pull_request, create_branch,\n"
             "list_projects, create_project, get_project_columns, add_issue_to_project,\n"
             "move_issue_to_column, update_project_issue_fields, list_project_issues,\n"
